@@ -6,7 +6,7 @@
 > - e2e 30/30 en ambos modos en altek (jobs 151470 directa / 151500 loader) y
 >   2-core en ambos modos (job 151533). e2e final con la instalación por
 >   defecto de altek (`~/gap_gem5`): 30/30, `e2e_runs/20260929_212042`.
-> - Merge (fast-forward) a `master` de RMC (`573de60`) y a `main` de
+> - Merge (fast-forward) a `master` de RMC (`34613e1`) y a `main` de
 >   `gap_gem5` (`8a09b7f`; luego `2d46ea2` añade `gem5/compile_altek.sh`).
 >   Las ramas de trabajo `claude/confident-franklin-kra1vo` (RMC) y
 >   `integration/rmc-direct` (`gap_gem5`) se borraron tras fusionarse.
@@ -62,7 +62,7 @@ puede ser fast-forward):
 | Repo | Base | Commits |
 |---|---|---|
 | gap_gem5 | `main` = `cf36d84f` | `4e7be909` restauración directa (`Process.rmcCheckpoint`/`rmcRemaps`, `src/sim/rmc_checkpoint.{hh,cc}`, hook en `X86_64Process::initState`); `d32b11e1` arreglo de `BaseMMU::takeOverFrom` para conmutar CPUs x86 con SMT y export de `suspendContext`/`activateContext` en `BaseCPU.py` |
-| RMC | `master` = `3f67067` | `1e48919` `--restore auto\|direct\|loader` en las configs, lanzadores y e2e; `b37c07a` `mem_mode` según la CPU de arranque, `smt2` válido en ambos modos, documentación |
+| RMC | `master` = `88b97f2` | `a2263f9` `--restore auto\|direct\|loader` en las configs, lanzadores y e2e; `36c11fc` `mem_mode` según la CPU de arranque, `smt2` válido en ambos modos, documentación |
 
 **Validado en un contenedor (no en altek):** `gem5.opt` compilado desde
 `gap_gem5@d32b11e1` + e2e real (`e2e_altek.sh` con `RMC_REMOTE=local` y un
