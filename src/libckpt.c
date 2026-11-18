@@ -7,7 +7,9 @@
  *        CKPT_OUTPUT=dump.ckpt LD_PRELOAD=./build/libckpt.so ./your_app &
  *        kill -SIGUSR1 $!
  *
- *   2. Timer (CKPT_AFTER_NS nanoseconds after process start):
+ *   2. Timer (CKPT_AFTER_NS nanoseconds after the library is loaded; armed in
+ *      the constructor with a one-shot POSIX timer, timer_create +
+ *      SIGEV_THREAD_ID, that sends SIGUSR1 to the main thread; no extra thread):
  *        CKPT_OUTPUT=dump.ckpt CKPT_AFTER_NS=5000000000 \
  *          LD_PRELOAD=./build/libckpt.so ./your_app
  *
@@ -22,7 +24,7 @@
  *
  * Compilation (handled by Makefile):
  *   gcc -O2 -shared -fPIC -o build/libckpt.so src/libckpt.c \
- *       build/dumper_pic.o -Isrc -ldl -lpthread
+ *       build/dumper_pic.o build/dumper_asm_pic.o -Isrc -ldl -lpthread
  */
 
 #define _GNU_SOURCE
@@ -33,7 +35,6 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <signal.h>
-#include <pthread.h>
 #include <time.h>
 #ifndef STATIC_BUILD
 #include <dlfcn.h>
@@ -43,7 +44,7 @@
 #include <sys/types.h>
 #include <stdatomic.h>
 #include <ucontext.h>
-
+#include <errno.h>
 #include "checkpoint.h"
 #include "dumper.h"
 
@@ -65,7 +66,6 @@ static void   *g_sym_addr       = NULL; /* resolved address            */
 static uint8_t g_sym_orig[1]    = {0};  /* saved first byte (for INT3) */
 static atomic_int g_sym_call_count = 0; /* how many times hook fired   */
 static int     g_sym_target_call = 1;   /* CKPT_AT_SYMBOL_CALL value   */
-static pthread_t g_main_tid     = 0;    /* main thread TID (set in ctor) */
 
 /* ------------------------------------------------------------------ */
 /*  Helpers: make a page (un)writable                                   */
@@ -419,24 +419,64 @@ static void install_symbol_hook(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Timer thread: raise SIGUSR1 after CKPT_AFTER_NS nanoseconds        */
+/*  Timer: raise SIGUSR1 after CKPT_AFTER_NS nanoseconds               */
 /* ------------------------------------------------------------------ */
-static void *timer_thread(void *arg)
-{
-    (void)arg;
-    struct timespec ts = {
-        .tv_sec  = (time_t)(g_after_ns / 1000000000ULL),
-        .tv_nsec = (long)  (g_after_ns % 1000000000ULL),
-    };
-    nanosleep(&ts, NULL);
 
-    if (!atomic_load(&g_dumped))
-        pthread_kill(g_main_tid, SIGUSR1);  /* signal the MAIN thread so it
-                                             * blocks in the handler while
-                                             * we capture its CPU state */
-    return NULL;
+/* OBSOLETE (stage 2): the timer thread was replaced by arm_dump_timer()
+ * below; kept commented only as a reference (see git history). */
+// static void *timer_thread(void *arg)
+// {
+//     (void)arg;
+//     struct timespec ts = {
+//         .tv_sec  = (time_t)(g_after_ns / 1000000000ULL),
+//         .tv_nsec = (long)  (g_after_ns % 1000000000ULL),
+//     };
+//     nanosleep(&ts, NULL);
+
+//     if (!atomic_load(&g_dumped))
+//         pthread_kill(g_main_tid, SIGUSR1);  /* signal the MAIN thread so it
+//                                              * blocks in the handler while
+//                                              * we capture its CPU state */
+//     return NULL;
+// }
+
+/* arm_dump_timer: arma un temporizador POSIX de un solo disparo que envia SIGUSR1
+ *   al hilo actual pasados `ns` nanosegundos (CLOCK_MONOTONIC, relativo).
+ *   ns:       > 0 (un it_value a cero desarmaria el temporizador).
+ *   tid_out:  recibe el TID del kernel del hilo al que se enviara la senal.
+ *   Devuelve: 0 si ok; -1 si falla, con errno valido de timer_create/settime
+ *             y la causa ya registrada con ckpt_log.
+ */
+static int arm_dump_timer(uint64_t ns, pid_t *tid_out){
+    pid_t tid = gettid();
+    struct sigevent sev = {0};
+    sev.sigev_notify = SIGEV_THREAD_ID;
+    sev.sigev_signo = SIGUSR1;
+    sev.sigev_value.sival_int = 0;
+    sev._sigev_un._tid = tid;
+
+    timer_t timerid;
+    if (timer_create(CLOCK_MONOTONIC, &sev, &timerid) != 0) {
+        int err = errno;                 /* copiar antes de llamar a nada mas */
+        ckpt_log("[libckpt] ERROR: timer_create: errno=%d (%s)\n", err, strerror(err));
+        errno = err;
+        return -1;
+    }
+
+    struct itimerspec its = {0};
+    its.it_value.tv_sec = ns / 1000000000ULL;
+    its.it_value.tv_nsec = ns % 1000000000ULL;
+
+    if (timer_settime(timerid, 0, &its, NULL) != 0) {
+        int err = errno;                 /* antes de timer_delete, que puede pisarlo */
+        timer_delete(timerid);
+        ckpt_log("[libckpt] ERROR: timer_settime: errno=%d (%s)\n", err, strerror(err));
+        errno = err;
+        return -1;
+    }
+    *tid_out = tid;
+    return 0;
 }
-
 /* ------------------------------------------------------------------ */
 /*  Constructor: runs when the .so is loaded by the dynamic linker     */
 /* ------------------------------------------------------------------ */
@@ -447,7 +487,7 @@ static void libckpt_init(void)
      * no child process (shells, nm, make, etc.) inherits LD_PRELOAD and
      * causes a fork bomb by re-loading libckpt.so recursively. */
     unsetenv("LD_PRELOAD");
-    g_main_tid = pthread_self();   /* record main thread for directed SIGUSR1 */
+    //g_main_tid = pthread_self();   /* record main thread for directed SIGUSR1 */
 
     extern char *program_invocation_short_name;
 
@@ -487,15 +527,28 @@ static void libckpt_init(void)
     if (g_sym_name[0])
         install_symbol_hook();
 
-    /* Launch timer thread if requested */
+    /* Arm the one-shot POSIX timer if requested */
     if (g_after_ns > 0) {
-        pthread_t tid;
+        /*pthread_t tid;
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        pthread_create(&tid, &attr, timer_thread, NULL);
+        int rc = pthread_create(&tid, &attr, timer_thread, NULL);
+        if(rc != 0){
+            ckpt_log("[libckpt] ERROR: rc=%d (%s)\n",  rc,strerror(rc));
+            pthread_attr_destroy(&attr);
+            return;
+        }
         pthread_attr_destroy(&attr);
         fprintf(stderr, "[libckpt] Timer thread started (%lu ns).\n",
                 (unsigned long)g_after_ns);
+        */
+        pid_t tid;
+        if (arm_dump_timer(g_after_ns, &tid) != 0) {
+            /* arm_dump_timer ya ha logueado que llamada fallo y por que */
+            _exit(1);
+        }
+        ckpt_log("[libckpt] Timer armed (%lu ns, tid %d).\n",
+                 (unsigned long)g_after_ns, (int)tid);
     }
 }
