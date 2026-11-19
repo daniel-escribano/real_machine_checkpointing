@@ -81,6 +81,29 @@ static int write_all(int fd, const void *buf, size_t n)
 }
 
 /* ------------------------------------------------------------------ */
+/*  errno inside the image                                              */
+/*  The dump itself changes errno (fcntl on closed fds -> EBADF, writes */
+/*  of unreadable pages -> EFAULT) BEFORE the page that holds it (TLS)  */
+/*  is written, so the payload carries the dumper's errno, not the      */
+/*  program's. Overwrite those bytes in the file with the value the     */
+/*  program had when the dump started.                                  */
+/* ------------------------------------------------------------------ */
+static int patch_errno_in_image(int fd, const ckpt_region_t *regions, int n,
+                                int value)
+{
+    uint64_t addr = (uint64_t)(uintptr_t)&errno;   /* this thread's errno */
+    for (int i = 0; i < n; i++) {
+        const ckpt_region_t *g = &regions[i];
+        if (addr < g->start || addr + sizeof(value) > g->end) continue;
+        if (addr - g->start + sizeof(value) > g->data_size) return -1; /* SKIP */
+       off_t off = (off_t)(g->file_offset + (addr - g->start));
+        return pwrite(fd, &value, sizeof(value), off) == (ssize_t)sizeof(value) ? 0 : -1;
+    }
+    return -1;
+}
+
+
+/* ------------------------------------------------------------------ */
 /*  Parse /proc/self/maps and populate region descriptors               */
 /* ------------------------------------------------------------------ */
 
@@ -325,6 +348,7 @@ static int dump_region_data(int fd, ckpt_region_t *reg, uint64_t *cur_off)
 
 int ckpt_dump_impl(const char *path, ckpt_regs_t *r)
 {
+    int local_errno = errno;
     ckpt_log("[ckpt] Starting dump to: %s\n", path);
 
     /* 1. Capture ROI entry RIP.
@@ -404,6 +428,8 @@ int ckpt_dump_impl(const char *path, ckpt_regs_t *r)
             goto fail;
         }
     }
+    if (patch_errno_in_image(fd, regions, num_regions, local_errno) < 0)
+        ckpt_log("[ckpt] WARNING: errno not found in the image, the restored program may see a stale errno\n");
 
     /* 6. Patch region descriptors with correct file_offset / data_size.
      * Use pwrite to avoid depending on the fd's current position. */
@@ -432,6 +458,7 @@ int ckpt_dump_impl(const char *path, ckpt_regs_t *r)
 
     ckpt_log("[ckpt] Dump complete. ROI RIP=0x%lx, RSP=0x%lx\n",
              roi_rip, r->rsp);
+    errno = local_errno;
     return 0;
 
 fail:

@@ -144,7 +144,9 @@ static void do_dump_from_ucontext(ucontext_t *uc)
 static void sigusr1_handler(int sig, siginfo_t *info, void *ctx)
 {
     (void)sig; (void)info;
+    int local_errno = errno;
     do_dump_from_ucontext((ucontext_t *)ctx);
+    errno = local_errno;
 }
 
 /* ------------------------------------------------------------------ */
@@ -214,20 +216,22 @@ static int g_rearm_pending = 0;
 static void sigtrap_rearm_or_hook(int sig, siginfo_t *info, void *ctx)
 {
     ucontext_t *uc = (ucontext_t *)ctx;
-
+    int local_errno = errno;
     if (g_rearm_pending) {
         /* We're here because of TF single-step -- reinstall INT3 */
         g_rearm_pending = 0;
         uc->uc_mcontext.gregs[REG_EFL] &= ~(greg_t)(1 << 8); /* clear TF */
+
         page_set_writable(g_sym_addr, 1);
         *(uint8_t *)g_sym_addr = 0xCC;
         page_set_writable(g_sym_addr, 0);
+        errno = local_errno;
         return;
     }
 
     /* Normal breakpoint hit */
     sigtrap_handler(sig, info, ctx);
-
+    errno = local_errno;
     /* If TF was set by sigtrap_handler (not-yet-target call), mark rearm */
     if (uc->uc_mcontext.gregs[REG_EFL] & (1 << 8))
         g_rearm_pending = 1;
