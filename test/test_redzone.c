@@ -9,7 +9,7 @@
  * onto the target stack), the check fails right after the restore.
  *
  *   launch_scripts/gen_ckpt.sh -t 300000000 -o rz.ckpt -- ./test_redzone
- *   setarch -R build/loader_pie rz.ckpt --native      # native check
+ *   setarch -R build/loader_pie rz.ckpt               # native check
  *
  * Output: one "REDZONE round N ok" line per round (in gem5, with a bounded
  * --maxinsts, they show how far the ROI got), then "REDZONE OK" (exit 0),

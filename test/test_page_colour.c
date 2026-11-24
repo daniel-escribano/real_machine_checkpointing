@@ -7,16 +7,16 @@
  * physical page number: the buffer only fits if its pages cover all 8
  * page colours.
  *
- * - --restore direct: gem5 allocates each run of checkpointed pages
+ * - direct restoration: gem5 allocates each run of checkpointed pages
  *   contiguously -> 8 colours, the buffer fits in L2 (~0.5% L2 misses).
- * - --restore loader: the loader memcpy()s from the mmap'd .ckpt, so source
- *   and target pages are faulted in alternately and the target gets every
- *   other physical page -> 4 colours, half of the L2 -> ~100% L2 misses.
+ * - the old --restore loader mode (removed 2026-11-24, last in 5d852186):
+ *   the loader memcpy()s from the mmap'd .ckpt, so source and target pages
+ *   are faulted in alternately and the target gets every other physical
+ *   page -> 4 colours, half of the L2 -> ~100% L2 misses.
  *
  *   gcc -O2 -mno-avx -mno-avx2 -fPIE -pie -o test_page_colour test/test_page_colour.c
  *   launch_scripts/gen_ckpt.sh -t 300000000 -o pc.ckpt -- ./test_page_colour
- *   gem5.opt x86_mixed.py --loader build/loader --ckpts pc.ckpt \
- *       --restore direct|loader --maxinsts 3000000
+ *   gem5.opt x86_mixed.py --loader build/loader --ckpts pc.ckpt --maxinsts 3000000
  *   grep system.l2cache.overallMisses::total m5out/stats.txt
  */
 #include <stdio.h>

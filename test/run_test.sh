@@ -6,7 +6,7 @@
 # process must continue reading at offset 5 from the moved file, and its
 # writes must be sinkholed (output.txt is not recreated).
 #
-# Runs on the host (loader --native): no gem5 needed. Everything happens in
+# Runs on the host (build/loader_pie): no gem5 needed. Everything happens in
 # a temporary directory; the repository is left untouched. The checkpoint is
 # generated with launch_scripts/gen_ckpt.sh, like every other checkpoint.
 set -euo pipefail
@@ -35,7 +35,7 @@ mv input1.txt new_dir/input1.txt
 rm output.txt
 
 echo "=== Second run (restoring with remap) ==="
-setarch -R "$REPO/build/loader_pie" dump.ckpt --native \
+setarch -R "$REPO/build/loader_pie" dump.ckpt \
     "$WORK/input1.txt=$WORK/new_dir/input1.txt" > run2.log 2> loader.log
 cat run2.log
 

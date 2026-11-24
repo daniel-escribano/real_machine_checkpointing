@@ -1,6 +1,6 @@
 #!/bin/bash
 # run_native_tests.sh - Regression tests of the checkpoint/restore flow that
-# run on the host (loader --native), without gem5.
+# run on the host (build/loader_pie), without gem5.
 #
 #   test/run_native_tests.sh [N]      # N = repetitions of the random tests (default 10)
 #
@@ -43,7 +43,7 @@ ko()  { echo "  FAIL  $*"; fail=$((fail+1)); }
 gen() { "$GEN" "$@" > /dev/null 2> gen.err || { cat gen.err; return 1; }; }
 restore() {    # restore <loader> <ckpt> [args]: program stdout
     local ld=$1 ck=$2; shift 2
-    timeout 60 setarch -R "$REPO/build/$ld" "$ck" --native "$@" 2> "$ck.restore.log"
+    timeout 60 setarch -R "$REPO/build/$ld" "$ck" "$@" 2> "$ck.restore.log"
 }
 
 echo "=== target_app (PIE, ckpt_dump) ==="
@@ -91,9 +91,9 @@ else
     ko "timer sin pthread_create: no checkpoint (no se armo el temporizador?)"
 fi
 
-echo "=== native loader must not execute m5_exit ==="
+echo "=== restored program exit code ==="
 restore loader_pie t.ckpt > /dev/null; rc=$?
-[ "$rc" = 0 ] && ok "--native skips m5_exit" || ko "loader --native exit code $rc"
+[ "$rc" = 0 ] && ok "restored target_app exits with 0" || ko "restored target_app exit code $rc"
 
 echo ""
 echo "RESULT: $pass passed, $fail failed"

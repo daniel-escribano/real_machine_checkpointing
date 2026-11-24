@@ -1,42 +1,28 @@
 """
 x86_mixed.py - Restauracion RMC con el ROI en O3.
 
-Restauracion directa (--restore direct, por defecto si el gem5 la soporta):
-  gem5 instala cada checkpoint en Process.initState(), sin simular nada: la
-  DerivO3CPU arranca en el tick 0 ya en el ROI. Con --warmup N, antes del ROI
-  se ejecutan N instrucciones en la CPU simple (calientan caches y TLB) y se
-  conmuta a O3 como en el modo loader.
-
-Restauracion por loader (--restore loader):
-  Fase 1 (carga) : TimingSimpleCPU (o AtomicSimpleCPU) ejecuta el loader, que
-                   restaura las regiones y lanza m5_exit(0) antes de saltar al ROI.
-  Fase 2 (ROI)   : m5.switchCpus() traspasa el estado a DerivO3CPU, que hereda
-                   la jerarquia L1/L2 por takeOverFrom(). Stats reseteadas.
+gem5 instala cada checkpoint en Process.initState() (restauracion directa,
+ver rmc_common.py), sin simular nada: la DerivO3CPU arranca en el tick 0 ya
+en el ROI. Con --warmup N, antes del ROI se ejecutan N instrucciones en una
+CPU simple (calientan caches y TLB) y se conmuta a O3 con m5.switchCpus(); la
+O3 hereda la jerarquia L1/L2 por takeOverFrom(). Stats reseteadas al empezar
+el ROI.
 
 Soporta 1 checkpoint (single-thread) o N checkpoints en SMT-N sobre un mismo
-nucleo (multiprogramado: procesos independientes compartiendo el core).
+nucleo (multiprogramado: procesos independientes compartiendo el core). Todos
+los hilos empiezan su ROI a la vez.
 
-CLAVE: la CPU switched-out NO debe tener controlador de interrupciones ni
-puertos conectados. Crearselos (p.ej. colgados de un dummy bus) hace que gem5
-aborte en el tick 0 con:
+CLAVE (con --warmup): la CPU switched-out NO debe tener controlador de
+interrupciones ni puertos conectados. Crearselos (p.ej. colgados de un dummy
+bus) hace que gem5 aborte en el tick 0 con:
     Interrupts::getAddrRanges(): Assertion `tc' failed
 Se sigue el patron de configs/common/Simulation.py: a la CPU switched-out solo
 se le asignan system, clk_domain, workload e isa (compartida), y createThreads().
 
-En SMT-N los loaders se sincronizan con una barrera (--barrier del loader)
-antes de su m5_exit: sin ella, el primer loader en terminar ejecutaria su
-ROI en la CPU simple mientras los demas siguen restaurando, y los ROI no
-empezarian a la vez.
-
-El loader de cada checkpoint se elige solo (build/loader o build/loader_pie,
-ver rmc_common.py). En restauracion directa no hay loader ni barrera: todos
-los hilos empiezan su ROI a la vez, en el tick 0.
-
 Uso:
-  gem5.opt --outdir=DIR x86_mixed.py --loader LOADER --ckpts A.ckpt [B.ckpt] \
-           [--restore auto|direct|loader] [--warmup N] \
-           [--load-cpu timing|atomic] [--maxinsts 1000000] [--no-caches] \
-           [--loader-opts "OLD=NEW ..."]
+  gem5.opt --outdir=DIR x86_mixed.py --loader build/loader --ckpts A.ckpt [B.ckpt] \
+           [--warmup N] [--load-cpu timing|atomic] [--maxinsts 1000000] \
+           [--no-caches] [--loader-opts "OLD=NEW ..."]
 """
 import argparse
 import os
@@ -45,26 +31,22 @@ import m5
 from m5.objects import *
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rmc_common import RESTORE_MODES, make_process, resolve_restore
+from rmc_common import make_process, require_direct_restore
 
-parser = argparse.ArgumentParser(description="RMC: carga en CPU simple, ROI en DerivO3CPU")
-parser.add_argument("--loader",   type=str, required=True, help="Binario loader (no PIE)")
-parser.add_argument("--loader-pie", type=str, default=None,
-                    help="Loader para checkpoints PIE (por defecto <loader>_pie si existe)")
+parser = argparse.ArgumentParser(description="RMC: restauracion directa, ROI en DerivO3CPU")
+parser.add_argument("--loader",   type=str, required=True,
+                    help="Binario estatico x86-64 que solo elige ISA/SO (build/loader); no se carga")
 parser.add_argument("--loader-opts", type=str, default="",
-                    help="Argumentos extra para todos los loaders (remapeos OLD=NEW)")
+                    help="Remapeos de rutas OLD=NEW para todos los checkpoints")
 parser.add_argument("--ckpts",    type=str, nargs="+", required=True,
                     help="1 checkpoint (ST) o N checkpoints (SMT-N sobre un core)")
 parser.add_argument("--maxinsts", type=int, default=1000000,
                     help="Instrucciones de ROI (por hilo; para el primero que llegue)")
-parser.add_argument("--restore", type=str, default="auto", choices=RESTORE_MODES,
-                    help="direct: gem5 instala el checkpoint sin simular nada (cero ciclos); "
-                         "loader: se simula el loader; auto: direct si este gem5 lo soporta")
 parser.add_argument("--warmup", type=int, default=0,
-                    help="Solo --restore direct: instrucciones en la CPU simple antes de "
+                    help="Instrucciones en la CPU simple antes de "
                          "conmutar a O3 (calentar caches). 0 = O3 desde el tick 0")
 parser.add_argument("--load-cpu", type=str, default="timing", choices=["timing", "atomic"],
-                    help="CPU de la fase de carga (o del calentamiento)")
+                    help="CPU simple del calentamiento (--warmup)")
 parser.add_argument("--no-caches", action="store_true", help="Desactivar L1/L2")
 parser.add_argument("--mem",      type=str, default="8GiB")
 parser.add_argument("--clock",    type=str, default="2GHz")
@@ -76,24 +58,22 @@ parser.add_argument("--pmu", action="store_true",
 args = parser.parse_args()
 
 NT = len(args.ckpts)
-RESTORE = resolve_restore(args.restore)
-if RESTORE == "loader" and args.warmup:
-    raise SystemExit("[rmc] FATAL: --warmup only makes sense with --restore direct")
-# Con loader siempre hay CPU simple + conmutacion; en directo, solo si se
-# pide calentamiento. Si no, la O3 es la unica CPU y arranca ya en el ROI.
-SWITCH = RESTORE == "loader" or args.warmup > 0
+require_direct_restore()
+# CPU simple + conmutacion solo si se pide calentamiento. Si no, la O3 es la
+# unica CPU y arranca ya en el ROI.
+SWITCH = args.warmup > 0
 
 # -- Sistema ----------------------------------------------------------------
 system = System()
 system.multi_thread = NT > 1
 system.clk_domain   = SrcClockDomain(clock=args.clock, voltage_domain=VoltageDomain())
-# El modo de memoria es el de la CPU que arranca: atomic solo si la carga (o
-# el calentamiento) va en AtomicSimpleCPU; switchCpus() pasa a timing para O3.
+# El modo de memoria es el de la CPU que arranca: atomic solo si el
+# calentamiento va en AtomicSimpleCPU; switchCpus() pasa a timing para O3.
 system.mem_mode     = "atomic" if SWITCH and args.load_cpu == "atomic" else "timing"
 system.mem_ranges   = [AddrRange(args.mem)]
 
 if SWITCH:
-    # CPU activa durante la carga (o el calentamiento)
+    # CPU activa durante el calentamiento
     system.cpu = (TimingSimpleCPU(cpu_id=0, numThreads=NT) if args.load_cpu == "timing"
                   else AtomicSimpleCPU(cpu_id=0, numThreads=NT))
     system.cpu.max_insts_any_thread = 0
@@ -108,9 +88,9 @@ if SWITCH:
     system.o3 = DerivO3CPU(cpu_id=0, numThreads=NT, switched_out=True)
     active = system.cpu
 else:
-    # Restauracion directa sin calentamiento: la O3 es la unica CPU y la
-    # activa. Se sigue llamando system.o3 para que las stats (system.o3.*)
-    # sean las mismas en ambos modos (parse_roi_stats.py).
+    # Sin calentamiento: la O3 es la unica CPU y la activa. Se llama
+    # system.o3 en ambos casos para que las stats (system.o3.*) sean las
+    # mismas (parse_roi_stats.py).
     system.o3 = DerivO3CPU(cpu_id=0, numThreads=NT)
     active = system.o3
 system.o3.max_insts_any_thread = 0
@@ -170,24 +150,16 @@ system.mem_ctrl.port       = system.membus.mem_side_ports
 # -- Cargas de trabajo: un proceso por hilo, cada uno con su checkpoint -----
 env_list = [f"{k}={v}" for k, v in os.environ.items()]
 remaps = args.loader_opts.split()
-loader_args = []
-if RESTORE == "loader" and NT > 1:
-    barrier = os.path.join(os.path.abspath(m5.options.outdir), "rmc_barrier")
-    open(barrier, "w").close()          # vacio: cada loader anade un byte
-    loader_args.append(f"--barrier={barrier}:{NT}")
 # Rutas absolutas: cada proceso arranca en el cwd de su checkpoint
 ckpts = [os.path.abspath(ck) for ck in args.ckpts]
-print(f"**** Restore: {RESTORE} ****", flush=True)
-procs, exes = [], []
+print("**** Restore: direct ****", flush=True)
+procs = []
 for i, ck in enumerate(ckpts):
-    proc, exe, cwd = make_process(ck, RESTORE, args.loader, args.loader_pie, remaps,
-                                  loader_args, pid=100 + i, env=env_list)
+    proc, cwd = make_process(ck, args.loader, remaps, pid=100 + i, env=env_list)
     procs.append(proc)
-    exes.append(exe)
-    via = "direct" if RESTORE == "direct" else os.path.basename(exe)
-    print(f"  {os.path.basename(ck)} -> {via}  cwd={cwd}", flush=True)
+    print(f"  {os.path.basename(ck)} -> direct  cwd={cwd}", flush=True)
 
-system.workload     = SEWorkload.init_compatible(exes[0])
+system.workload     = SEWorkload.init_compatible(args.loader)
 active.workload = procs
 active.createThreads()
 
@@ -201,29 +173,11 @@ if SWITCH:
 root = Root(full_system=False, system=system)
 m5.instantiate()
 
-# -- Fase 1: carga (loader) o calentamiento (directa) -----------------------
-if RESTORE == "loader":
-    print(f"**** PHASE 1: {NT} loader(s) on {args.load_cpu} ****", flush=True)
-    done = 0
-    while done < NT:
-        ev    = m5.simulate()
-        cause = ev.getCause()
-        if cause == "m5_exit instruction encountered":
-            done += 1
-            # Instrucciones por hilo en cada m5_exit: tras la barrera, lo que un
-            # hilo avance entre el primer y el ultimo m5_exit es ROI ejecutado en
-            # la CPU simple (debe ser despreciable frente a --maxinsts).
-            counts = [active.getCurrentInstCount(t) for t in range(NT)]
-            print(f"  [loader {done}/{NT}] ready at tick {m5.curTick()}  insts={counts}",
-                  flush=True)
-        else:
-            print(f"[rmc] ERROR: unexpected event while loading: '{cause}' @ {m5.curTick()}", flush=True)
-            print(f"Exited @ tick {m5.curTick()} because {cause}")
-            raise SystemExit(1)
-    load_insts = [active.getCurrentInstCount(t) for t in range(NT)]
-    print(f"**** Load complete. Instructions per thread: {load_insts} ****", flush=True)
-elif args.warmup:
-    print(f"**** PHASE 1: warm-up of {args.warmup} instructions on {args.load_cpu} ****",
+print("**** Checkpoint(s) installed in initState: 0 load cycles ****", flush=True)
+
+# -- Calentamiento (opcional) ----------------------------------------------
+if args.warmup:
+    print(f"**** WARM-UP: {args.warmup} instructions on {args.load_cpu} ****",
           flush=True)
     for t in range(NT):
         active.scheduleInstStop(t, args.warmup, f"calentamiento: hilo {t}")
@@ -235,8 +189,6 @@ elif args.warmup:
         raise SystemExit(1)
     warm = [active.getCurrentInstCount(t) for t in range(NT)]
     print(f"**** Warm-up complete. Instructions per thread: {warm} ****", flush=True)
-else:
-    print("**** Checkpoint(s) installed in initState: 0 load cycles ****", flush=True)
 
 # -- Cambio de CPU ----------------------------------------------------------
 if SWITCH:
@@ -249,12 +201,12 @@ if args.trace_roi:
     from m5.debug import flags
     flags["Exec"].enable()
 
-# -- Fase 2: ROI en O3 ------------------------------------------------------
+# -- ROI en O3 -------------------------------------------------------------
 for t in range(NT):
     system.o3.scheduleInstStop(t, args.maxinsts,
                              f"ROI: hilo {t} alcanzo {args.maxinsts} instrucciones")
 
-print(f"**** PHASE 2: ROI on O3, {args.maxinsts} instructions per thread ****", flush=True)
+print(f"**** ROI on O3, {args.maxinsts} instructions per thread ****", flush=True)
 ev  = m5.simulate()
 roi = [system.o3.getCurrentInstCount(t) for t in range(NT)]
 

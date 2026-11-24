@@ -3,8 +3,7 @@
 #
 # Builds example.c, checkpoints it at its first call to target_function()
 # (launch_scripts/gen_ckpt.sh -s, i.e. libckpt.so with CKPT_AT_SYMBOL), and
-# restores it with the loader in --native mode (m5_exit is an illegal
-# instruction outside gem5).
+# restores it on the host with the loader.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -27,8 +26,8 @@ echo ""
 ls -lh example_dump.ckpt
 
 echo ""
-echo "[4] Restoring from the checkpoint (loader --native)..."
+echo "[4] Restoring from the checkpoint (loader)..."
 LOADER_BIN="$(python3 gem5_configs/rmc_common.py example_dump.ckpt build)"
-setarch -R "$LOADER_BIN" example_dump.ckpt --native
+setarch -R "$LOADER_BIN" example_dump.ckpt
 
 echo "[+] Success!"

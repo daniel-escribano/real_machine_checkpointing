@@ -44,14 +44,11 @@ defecto `~/gap_gem5/gem5/build/X86/gem5.opt`), `SPEC_REMOTE_DIR`
 
 ### Que comprueba cada prueba
 
-Cada prueba restaura su checkpoint en gem5 y pasa si gem5 termina bien, el
-loader llega al `m5_exit` (en todos los procesos; con `--restore direct`, gem5
-instala los checkpoints en `initState`), no aparece ningun error
-(`panic`/`fatal` de gem5, `FATAL` del loader, corrupcion de malloc, violacion
-de segmento) y la salida esperada aparece. `--restore auto|direct|loader`
-elige el modo (ver [`RESTAURACION_DIRECTA.md`](RESTAURACION_DIRECTA.md)); en
-directo no hay loader, asi que las pruebas comprueban que el mismo estado
-restaurado por gem5 da la misma salida:
+Cada prueba restaura su checkpoint en gem5 (restauracion directa, ver
+[`RESTAURACION_DIRECTA.md`](RESTAURACION_DIRECTA.md)) y pasa si gem5 termina
+bien, instala los checkpoints en `initState`, no aparece ningun error
+(`panic`/`fatal` de gem5, `[rmc] ERROR`/`FATAL` de la config, corrupcion de
+malloc, violacion de segmento) y la salida esperada aparece:
 
 | Prueba | Checkpoint | Pasa si | Bugs que cubre |
 |---|---|---|---|
@@ -60,7 +57,7 @@ restaurado por gem5 da la misma salida:
 | `redzone` | PIE, volcado por senal en una funcion hoja | >= 2 `REDZONE round N ok` y ningun `REDZONE CORRUPT` | 1 |
 | `signal_malloc` | PIE, volcado por senal dentro de malloc | >= 2 `MALLOC chunk N ok` sin abortos de glibc | 2, 4 (ampliacion del break, `loader_pie`) |
 | `vdso` | PIE | >= 2 `CLOCK round N ok` y ningun `CLOCK STUCK` | 11 |
-| `smt2` | `redzone` + `signal_malloc` en SMT-2 (O3) | loader: `SMT barrier passed` en los dos procesos, cada uno con su loader; directa: los dos procesos instalados (`-> direct`) y el ROI en O3 sin errores | 4, 10 |
+| `smt2` | `redzone` + `signal_malloc` en SMT-2 (O3) | los dos procesos instalados (`-> direct`) y el ROI en O3 sin errores | 4 |
 | `spec_<b>` | cada benchmark rate preparado (`--spec all`), comando de su `speccmds.cmd` | llega a `--spec-insts` instrucciones de ROI | todo el flujo, cwd y remapeo de SPEC |
 
 Las pruebas que no terminan solas (`redzone`, `signal_malloc`, `vdso`) se
@@ -89,10 +86,14 @@ gem5dbg() {   # gem5dbg <ckpt> <maxinsts>: CPU atomic + traza de syscalls
 (Los checkpoints se pueden generar en altek o traer los de una ejecucion de
 `e2e_altek.sh`: estan en `~/TFM/rmc_e2e/<ID>/ckpt/`, con su `.meta`.)
 
-Cada ejecucion imprime `**** Loader: .../loader_pie   cwd: ... ****`: la
-eleccion automatica de loader y el directorio de trabajo restaurado
-(`gem5_configs/rmc_common.py`). `python3 $R/tools/ckpt_inspect.py X.ckpt`
-muestra la version, el `heap_end`, el loader recomendado y el `cwd`.
+Cada ejecucion imprime `**** Direct restoration   cwd: ... ****`, el
+directorio de trabajo restaurado (`gem5_configs/rmc_common.py`).
+`python3 $R/tools/ckpt_inspect.py X.ckpt` muestra la version, el `heap_end`,
+el loader nativo recomendado y el `cwd`.
+
+> Las comprobaciones de los bugs 3, 4 (lado loader) y 10 de abajo describen el
+> loader ejecutado dentro de gem5, retirado el 24-11-2026 (ultimo commit con
+> ese modo: `5d852186`). Se conservan como referencia de esos arreglos.
 
 ### Program break (bug 4)
 

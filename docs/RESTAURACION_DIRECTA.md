@@ -1,5 +1,7 @@
 # Restauracion directa en gem5 (zero-cycle restore)
 
+> **24-11-2026:** el modo `--restore loader` se retiro de gem5 (configs, lanzadores y e2e); el loader queda solo para restaurar en la maquina real. Las referencias a `--restore`, `RMC_RESTORE`, `--seq-load` y la barrera de este documento son históricas: el último commit que las tiene es `5d852186`.
+
 Hasta ahora un checkpoint RMC se restauraba **simulando** `build/loader`
 (o `loader_pie`): un binario estatico que, dentro de gem5, reconstruye el
 proceso con `mmap`/`memcpy`/`brk`/`dup2`/`arch_prctl`/`fxrstor` y marca la

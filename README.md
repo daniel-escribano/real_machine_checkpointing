@@ -5,18 +5,16 @@ registros, TLS y descriptores de fichero) y lo reinyecta dentro de **gem5 en
 modo Syscall Emulation**. El simulador arranca directamente en la Región de
 Interés (ROI), sin hacer *fast-forward* de miles de millones de instrucciones.
 
-Hay dos formas de restaurar el mismo `.ckpt`:
-
-| | Restauración directa (por defecto) | Loader |
-|---|---|---|
-| Quién reconstruye el proceso | gem5, en `Process::initState()` | `build/loader`, simulado dentro de gem5 |
-| Instrucciones simuladas antes del ROI | 0 | millones (`xz`: 246 M) |
-| gem5 necesario | el de [`gap_gem5`](https://github.com/jefemaestro302/gap_gem5) (`Process.rmcCheckpoint`) | cualquiera |
-| Se elige con | `--restore direct` | `--restore loader` |
-
-Con `--restore auto` (el valor por defecto de todas las configs) se usa la
-directa si el gem5 la soporta. Diseño y validación completos en
+gem5 reconstruye el proceso en `Process::initState()` (**restauración
+directa**): 0 instrucciones simuladas antes del ROI. Requiere el gem5 de
+[`gap_gem5`](https://github.com/jefemaestro302/gap_gem5) (`Process.rmcCheckpoint`);
+con otro, las configs terminan con `[rmc] FATAL`. Diseño y validación en
 [`docs/RESTAURACION_DIRECTA.md`](docs/RESTAURACION_DIRECTA.md).
+
+El loader (`build/loader`, `build/loader_pie`) restaura el mismo `.ckpt` en
+la **máquina real**, para validar un checkpoint en segundos sin gem5. Hasta
+el 24-11-2026 también podía restaurar dentro de gem5 (`--restore loader`);
+ese modo se retiró y el último commit que lo tiene es `5d852186`.
 
 ## Cómo funciona
 
@@ -27,15 +25,15 @@ directa si el gem5 la soporta. Diseño y validación completos en
      │ LD_PRELOAD=libckpt.so
      │ (SIGUSR1 | CKPT_AFTER_NS | CKPT_AT_SYMBOL)
      ▼
-  dumper: /proc/self/maps + ucontext ──► .ckpt ─┬─► directa: gem5 instala regiones, FDs y
+  dumper: /proc/self/maps + ucontext ──► .ckpt ─┬─► gem5: instala regiones, FDs y
                                                 │   registros en initState(); el primer
                                                 │   ciclo simulado ya es el ROI
                                                 │
-                                                └─► loader (estático, .text en 0x20000000):
-                                                    mmap MAP_FIXED de cada región, reabre
-                                                    los FDs, arch_prctl(ARCH_SET_FS),
-                                                    m5_exit (frontera del ROI), restaura
-                                                    los GPRs y salta a RIP
+                                                └─► loader, en la máquina real (estático,
+                                                    .text en 0x20000000): mmap MAP_FIXED de
+                                                    cada región, reabre los FDs,
+                                                    arch_prctl(ARCH_SET_FS), restaura los
+                                                    GPRs y salta a RIP
 ```
 
 Formato del `.ckpt` (versión 2, ver `src/checkpoint.h`):
@@ -54,9 +52,9 @@ la memoria restaurada y la aplicación ejecuta basura.
 |---|---|
 | `src/libckpt.c` | Librería LD_PRELOAD: dispara y captura el checkpoint |
 | `src/dumper.c`, `src/dumper_asm.S` | Serializa registros, VMAs y FDs al `.ckpt` |
-| `src/loader.c` | Restaurador estático que corre dentro de gem5 (`build/loader` para objetivos no PIE, `build/loader_pie` para PIE) y en la máquina real con `--native` |
+| `src/loader.c` | Restaurador nativo en la máquina real (`build/loader` para objetivos no PIE, `build/loader_pie` para PIE); en gem5, `build/loader` solo indica la ISA del `Process` |
 | `src/checkpoint.h` | Formato del fichero, compartido por todos los lados |
-| `gem5_configs/x86_mixed.py` | ROI en DerivO3CPU con cachés (ST y SMT-N), en ambos modos de restauración |
+| `gem5_configs/x86_mixed.py` | ROI en DerivO3CPU con cachés (ST y SMT-N) |
 | `gem5_configs/x86_mixed_2core.py` | Dos núcleos O3 con SMT cada uno (`--ckpts0` y `--ckpts1`) |
 | `gem5_configs/x86_st_timing.py` | Todo en una CPU simple: bucle rápido de depuración |
 | `gem5_configs/rmc_common.py` | Modo de restauración y elección automática de loader |
@@ -131,13 +129,11 @@ aplican solos.
 
 ```bash
 python3 tools/ckpt_inspect.py dump.ckpt | head      # versión, heap, loader recomendado
-setarch -R build/loader_pie dump.ckpt --native      # (build/loader si no es PIE)
+setarch -R build/loader_pie dump.ckpt             # (build/loader si no es PIE)
 ```
 
-`--native` omite el `m5_exit` (en hardware real es una instrucción ilegal).
-Otras opciones del loader: `OLD=NEW` remapea las rutas de los ficheros
-abiertos (`/spec2017/=$HOME/spec_cpu_2017/`), `--barrier=FICHERO:N`
-sincroniza N loaders en SMT (lo pone `x86_mixed.py`).
+`OLD=NEW` remapea las rutas de los ficheros abiertos
+(`/spec2017/=$HOME/spec_cpu_2017/`).
 
 ### 4. Simular
 
@@ -151,9 +147,8 @@ launch_scripts/run_mixed.sh mi_tag 10000000 timing --pmu dump.ckpt
 # SMT-2 multiprogramado sobre un mismo núcleo
 launch_scripts/run_mixed.sh smt2 10000000 timing --pmu a.ckpt b.ckpt
 
-# Forzar un modo. En directa, calentar cachés N instrucciones antes del ROI
-RMC_RESTORE=loader launch_scripts/run_mixed.sh mi_tag 10000000 timing dump.ckpt
-RMC_RESTORE=direct RMC_WARMUP=5000000 launch_scripts/run_mixed.sh mi_tag 10000000 atomic dump.ckpt
+# Calentar cachés y TLB N instrucciones (CPU simple) antes del ROI
+RMC_WARMUP=5000000 launch_scripts/run_mixed.sh mi_tag 10000000 atomic dump.ckpt
 
 # Dos núcleos con SMT-2 cada uno (directamente con gem5)
 gem5.opt x86_mixed_2core.py --loader build/loader --ckpts0 a.ckpt b.ckpt --ckpts1 c.ckpt d.ckpt
@@ -162,27 +157,19 @@ gem5.opt x86_mixed_2core.py --loader build/loader --ckpts0 a.ckpt b.ckpt --ckpts
 launch_scripts/parse_roi_stats.py ~/TFM/m5out/mi_tag
 ```
 
-En directa la O3 arranca en el tick 0 con el proceso ya restaurado, y las
-stats miden solo el ROI. Con loader, `x86_mixed.py` ejecuta el loader en una
-CPU simple (es puro `memcpy`, no aporta nada microarquitectónico y en O3 cuesta
-horas) y en el `m5_exit` que el loader emite justo antes de saltar al ROI hace
-`m5.switchCpus()` a `DerivO3CPU`, que hereda la jerarquía L1/L2 por
-`takeOverFrom()`. Las stats se resetean ahí.
-
-Con loader, las configs eligen solas `build/loader` o `build/loader_pie` según
-dónde esté el `[heap]` del checkpoint: el loader mueve el *program break* al
-final del heap restaurado, y en gem5 el coste es lineal en la distancia (ver
-`docs/BUG_FIXES.md`, bug 4). Remapeos de rutas: el `<ckpt>.remap` de cada
-checkpoint, más `LOADER_OPTS="OLD=NEW ..."` si hace falta (en las configs,
-`--loader-opts`).
+La O3 arranca en el tick 0 con el proceso ya restaurado, y las stats miden
+solo el ROI. Con `RMC_WARMUP=N` (`--warmup` en las configs), antes se ejecutan
+N instrucciones en una CPU simple y `m5.switchCpus()` pasa a `DerivO3CPU`, que
+hereda la jerarquía L1/L2 por `takeOverFrom()`; las stats se resetean ahí.
+Remapeos de rutas: el `<ckpt>.remap` de cada checkpoint, más
+`LOADER_OPTS="OLD=NEW ..."` si hace falta (en las configs, `--loader-opts`).
 
 ### 5. Prueba de extremo a extremo en altek (desde el PC)
 
 ```bash
 launch_scripts/e2e_altek.sh                                  # pruebas de test/
 launch_scripts/e2e_altek.sh --spec mcf,perlbench             # + SPEC
-launch_scripts/e2e_altek.sh --restore direct --spec all      # los 23 SPEC rate, restauración directa
-launch_scripts/e2e_altek.sh --restore loader --spec all      # ídem con loader
+launch_scripts/e2e_altek.sh --spec all                       # los 23 SPEC rate
 ```
 
 Compila, genera los checkpoints, los sube a altek con el repo compilado, lanza
@@ -192,8 +179,8 @@ la terminal, `--attach ID` se reengancha. Detalle de cada prueba en
 `docs/VERIFICACION_GEM5.md`.
 
 Estado a 29-09-2026: **30/30** (7 pruebas de `test/` + 23 SPEC) en los dos
-modos. La suma de tiempos de gem5 baja de 5214 s con loader a 1110 s en
-directa.
+modos que había entonces. La suma de tiempos de gem5 bajaba de 5214 s con
+loader a 1110 s en directa.
 
 ### 6. Instalar en el cluster
 
@@ -207,17 +194,16 @@ gcc 11 de los nodos de cómputo es otra versión y el binario resultante
 corrompe el estado restaurado) con `gem5/compile_altek.sh`, que es un script
 del repo `gap_gem5`.
 
-## Diferencia conocida con el loader: coloreado de páginas
+## Diferencia con el antiguo modo loader: coloreado de páginas
 
-Con el loader, la aplicación queda en marcos físicos alternos (el `memcpy`
+Con el loader dentro de gem5 (retirado el 24-11-2026), la aplicación queda en marcos físicos alternos (el `memcpy`
 alterna páginas del `.ckpt` y de destino), así que con una L2 de 256 KiB y 8
 vías solo usa la mitad de los conjuntos. En `mcf` eso da un IPC un 15 % menor
 que en directa (0,616 frente a 0,724) sin diferencias en L1D ni en la TLB.
 La restauración directa reparte los marcos por todos los colores, como Linux.
 
-- Resultados nuevos: restauración directa (con `--warmup` si el ROI es corto).
-- Comparar con resultados antiguos hechos con el loader: `--restore loader`,
-  que reproduce el mismo sesgo.
+- Los resultados antiguos hechos con el loader llevan este sesgo. Para
+  reproducirlos, el último commit con `--restore loader` es `5d852186`.
 - Explicación, tabla del microbenchmark (`test/test_page_colour.c`) y la de
   `mcf` en [`docs/RESTAURACION_DIRECTA.md`](docs/RESTAURACION_DIRECTA.md).
 

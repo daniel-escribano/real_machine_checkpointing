@@ -1,5 +1,7 @@
 # HANDOFF: validar la restauración directa en altek, unificar versiones y llevarlo a las ramas principales
 
+> **24-11-2026:** el modo `--restore loader` se retiró de gem5 (configs, lanzadores y e2e); el loader queda solo para restaurar en la máquina real. Las referencias a `--restore`, `RMC_RESTORE`, `--seq-load` y la barrera de este documento son históricas: el último commit que las tiene es `5d852186`.
+
 > **Estado: completado el 29-09-2026.** Todo hecho y validado; no queda
 > trabajo pendiente de este handoff.
 >

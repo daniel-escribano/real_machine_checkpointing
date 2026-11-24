@@ -1,17 +1,16 @@
 /**
- * loader.c - Custom static loader for checkpoint restore
+ * loader.c - Native (host) restore of an RMC checkpoint
  *
  * Usage:
- *   loader <dump.ckpt> [--native] [--barrier=FILE:N] [OLD_PREFIX=NEW_PREFIX ...]
+ *   loader <dump.ckpt> [OLD_PREFIX=NEW_PREFIX ...]
  *
- *   --native          do not execute m5_exit (a gem5 pseudo-instruction that
- *                     is an illegal opcode, SIGILL, on real hardware). Use it
- *                     to test a checkpoint on the host.
- *   --barrier=FILE:N  SMT-N runs: every loader appends one byte to FILE after
- *                     restoring and waits until FILE holds N bytes, so that
- *                     all threads reach the ROI boundary (m5_exit) together.
  *   OLD=NEW           reopen checkpointed files whose path starts with the
  *                     path component(s) OLD from NEW instead.
+ *
+ * It restores the checkpoint on the real machine and resumes the program at
+ * its ROI entry, to validate a checkpoint without gem5 (test/, run_example.sh).
+ * gem5 does not run it: there the checkpoint is installed directly by
+ * Process.rmcCheckpoint (gem5_configs/rmc_common.py).
  *
  * Key architectural insight:
  *   - Loader .text:   0x20000000+ (via -Wl,-Ttext-segment=0x20000000)
@@ -50,18 +49,13 @@
  *         - the target's [vdso] functions are patched into plain syscalls
  *           (the copied host vDSO reads a frozen [vvar] page and host TSC
  *           parameters, so it would return a stuck/garbage clock in gem5)
- *         - optional SMT barrier
  *         - arch_prctl(ARCH_SET_FS) to restore TLS
  *         - fxrstor from ckpt_regs_t.fpregs restores the FPU/SSE state
  *         - jump to the trampoline copy in the scratch page, which
  *             0) munmaps the checkpoint file,
  *             a) moves the program break to the target's heap end when it
  *                lies below the loader's (see fix_brk below),
- *             b) executes m5_exit(0): gem5-only pseudo-instruction marking
- *                the ROI boundary, so the simulation script can reset stats
- *                and switch to a detailed CPU model before the target
- *                resumes (skipped with --native),
- *             c) restores RFLAGS on the scratch stack, then the GPRs and
+ *             b) restores RFLAGS on the scratch stack, then the GPRs and
  *                %rsp, and jumps to the checkpointed RIP through memory.
  *           Nothing is ever pushed on the restored stack: the interrupted
  *           code may keep live data in the 128-byte red zone below %rsp.
@@ -159,14 +153,14 @@ static ssize_t read_exact(int fd, void *buf, size_t n)
 /*  on the scratch stack.                                                */
 /* ------------------------------------------------------------------ */
 extern const char rmc_tramp_start[], rmc_tramp_end[];
-extern const char rmc_tramp_brk[], rmc_tramp_m5[], rmc_tramp_rip[];
+extern const char rmc_tramp_brk[], rmc_tramp_rip[];
 extern const char rmc_tramp_ckpt[], rmc_tramp_ckpt_len[];
 
 __asm__ (
     "    .text\n"
     "    .balign 16\n"
     "    .globl rmc_tramp_start, rmc_tramp_end\n"
-    "    .globl rmc_tramp_brk, rmc_tramp_m5, rmc_tramp_rip\n"
+    "    .globl rmc_tramp_brk, rmc_tramp_rip\n"
     "    .globl rmc_tramp_ckpt, rmc_tramp_ckpt_len\n"
     "rmc_tramp_start:\n"
     /* 0) munmap(checkpoint): the target gets a clean address space */
@@ -188,17 +182,7 @@ __asm__ (
     "    syscall\n"
     "    movq  %r12, %rax\n"
     "1:\n"
-    /* b) m5_exit(0): ROI boundary (skipped with --native) */
-    "    cmpq  $0, rmc_tramp_m5(%rip)\n"
-    "    je    2f\n"
-    "    movq  %rax, %r12\n"
-    "    xorl  %edi, %edi\n"
-    "    xorl  %esi, %esi\n"
-    "    .byte 0x0f, 0x04\n"
-    "    .word 0x21\n"                          /* m5_exit */
-    "    movq  %r12, %rax\n"
-    "2:\n"
-    /* c) RFLAGS via the scratch stack, then GPRs, then %rsp, then jump.
+    /* b) RFLAGS via the scratch stack, then GPRs, then %rsp, then jump.
      *    mov does not modify flags, so RFLAGS survives until the jmp. */
     "    pushq 0x88(%rax)\n"
     "    popfq\n"
@@ -221,7 +205,6 @@ __asm__ (
     "    jmp   *rmc_tramp_rip(%rip)\n"
     "    .balign 8\n"
     "rmc_tramp_brk: .quad 0\n"
-    "rmc_tramp_m5:  .quad 0\n"
     "rmc_tramp_rip: .quad 0\n"
     "rmc_tramp_ckpt: .quad 0\n"
     "rmc_tramp_ckpt_len: .quad 0\n"
@@ -233,7 +216,7 @@ __asm__ (
 /*                                                                       */
 /*  SCRATCH_VA        +-----------------------------------------------+ */
 /*  (0x7E0000000000)  | restore_ctx_t (num_regions, ckpt_data*,       | */
-/*                    | descs*, fs_base, barrier, regs)               | */
+/*                    | descs*, fs_base, regs)                        | */
 /*  + TRAMP_OFF       | copy of rmc_tramp_start..rmc_tramp_end        | */
 /*                    +-----------------------------------------------+ */
 /*  + STACK_OFF       | Scratch stack (grows downward from top)       | */
@@ -247,16 +230,13 @@ __asm__ (
 /* Parameters for the restore stage, stored in the scratch page */
 typedef struct {
     uint32_t       num_regions;
-    uint32_t       barrier_n;     /* SMT barrier: number of loaders (0 = off) */
     void          *ckpt_data;     /* mmap'd checkpoint file             */
     ckpt_region_t *descs;         /* region descriptors (inside ckpt_data) */
     uint64_t       fs_base;       /* TLS fs_base to restore             */
     char          *tramp;         /* trampoline copy in the scratch page */
-    uint64_t       brk_grow;      /* gem5: brk() up to here before restoring */
-    uint64_t       heap_start;    /* target [heap], for --native prctl   */
+    uint64_t       brk_grow;      /* brk() up to here before restoring  */
+    uint64_t       heap_start;    /* target [heap], for the prctl fallback */
     uint64_t       heap_end;
-    uint32_t       native;
-    char           barrier_path[512];
     ckpt_regs_t    regs;
 } restore_ctx_t;
 
@@ -351,28 +331,6 @@ static void patch_vdso(uint8_t *base, size_t size)
 }
 
 /* ------------------------------------------------------------------ */
-/*  SMT barrier (runs after the restore, on the scratch stack)          */
-/* ------------------------------------------------------------------ */
-static void smt_barrier(restore_ctx_t *ctx)
-{
-    int bfd = open(ctx->barrier_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (bfd < 0) { WARN("cannot open barrier file, not waiting"); return; }
-    if (write(bfd, "x", 1) != 1) WARN("barrier write failed");
-    close(bfd);
-
-    struct stat st;
-    for (;;) {
-        if (stat(ctx->barrier_path, &st) == 0 &&
-            (uint64_t)st.st_size >= ctx->barrier_n)
-            break;
-        /* Keep the poll cheap: few syscalls, and the instructions spent
-         * here by the last loaders bound the ROI skew between threads. */
-        for (volatile int i = 0; i < 256; i++) { }
-    }
-    LOG("SMT barrier passed");
-}
-
-/* ------------------------------------------------------------------ */
 /*  Stage 2: restore all regions, then jump (on scratch stack)          */
 /*                                                                       */
 /*  This function NEVER uses the loader's original stack.               */
@@ -430,27 +388,24 @@ static void restore_and_jump(restore_ctx_t *ctx)
         mprotect(m, sz, prot);
     }
 
-    /* --native: Linux refuses to move the break below start_brk, and may
+    /* Linux refuses to move the break below start_brk, and may
      * refuse a huge brk_grow (overcommit). PR_SET_MM can do it instead
      * (needs CAP_SYS_RESOURCE, as in CRIU). The two orders keep
      * start_brk <= brk valid at every step. */
-    if (ctx->native && ctx->heap_end &&
+    if (ctx->heap_end &&
         (uint64_t)syscall(SYS_brk, 0) != ctx->heap_end) {
         int ok = (prctl(PR_SET_MM, PR_SET_MM_BRK, ctx->heap_end, 0, 0) == 0 &&
                   prctl(PR_SET_MM, PR_SET_MM_START_BRK, ctx->heap_start, 0, 0) == 0) ||
                  (prctl(PR_SET_MM, PR_SET_MM_START_BRK, ctx->heap_start, 0, 0) == 0 &&
                   prctl(PR_SET_MM, PR_SET_MM_BRK, ctx->heap_end, 0, 0) == 0);
         if (!ok)
-            WARN("--native could not move the program break (needs "
+            WARN("could not move the program break (needs "
                 "CAP_SYS_RESOURCE); malloc may fail once the heap grows or shrinks");
     }
 
-    if (ctx->barrier_n > 1) smt_barrier(ctx);
-
     /* The loader's glibc startup did set_tid_address(&its TCB->tid). That
      * TCB lives in the loader's own break, which the trampoline may unmap
-     * (fix_brk) or the restored regions may cover. At exit the kernel (or
-     * gem5, which aborts with "writeBlob failed" if the page is gone) would
+     * (fix_brk) or the restored regions may cover. At exit the kernel would
      * write 0 there and futex-wake it. The target is single-threaded after
      * restore and nobody waits on that futex: clear it. */
     syscall(SYS_set_tid_address, NULL);
@@ -465,7 +420,7 @@ static void restore_and_jump(restore_ctx_t *ctx)
         __asm__ volatile("fxrstor %0" : : "m" (r->fpregs));
     }
 
-    /* Continue in the trampoline copy (brk fix, m5_exit, register restore) */
+    /* Continue in the trampoline copy (brk fix, register restore) */
     __asm__ volatile (
         "jmp *%1\n\t"
         :
@@ -566,7 +521,7 @@ static int is_regular_file_path(const char *p)
 /*  File descriptor restore                                              */
 /* ------------------------------------------------------------------ */
 static void restore_fds(const ckpt_fd_t *fds, uint32_t num_fds,
-                        char **remaps, int nremaps, int native)
+                        char **remaps, int nremaps)
 {
     for (uint32_t i = 0; i < num_fds; i++) {
         const ckpt_fd_t *cfd = &fds[i];
@@ -574,11 +529,7 @@ static void restore_fds(const ckpt_fd_t *fds, uint32_t num_fds,
         const char *path = remap_path(cfd->path, remaps, nremaps);
 
         if (cfd->fd == CKPT_FD_CWD) {
-            /* In gem5 the working directory is set by the config through
-             * Process(cwd=...): a chdir() here would also move the host cwd
-             * of gem5 itself (and the PMU CSVs it writes with relative
-             * paths). Natively the loader applies it. */
-            if (native && chdir(path) < 0) {
+            if (chdir(path) < 0) {
                 log_str("[loader] WARN: cannot chdir to the checkpoint cwd: ");
                 log_str(path);
                 log_str("\n");
@@ -689,19 +640,22 @@ static int loader_overlap(const ckpt_region_t *descs, uint32_t n, uint64_t heap_
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        log_str("Usage: loader <dump.ckpt> [--native] [--barrier=FILE:N] [OLD=NEW ...]\n");
+        log_str("Usage: loader <dump.ckpt> [OLD=NEW ...]\n");
         return 1;
     }
 
     /* ---- 0. Options ---- */
-    int native = 0;
-    const char *barrier = NULL;
     char **remaps = malloc(sizeof(char *) * (size_t)argc);
     int nremaps = 0;
     if (!remaps) DIE("OOM args");
     for (int j = 2; j < argc; j++) {
-        if (strcmp(argv[j], "--native") == 0) native = 1;
-        else if (strncmp(argv[j], "--barrier=", 10) == 0) barrier = argv[j] + 10;
+        /* Options of the retired in-gem5 mode. --native is what the loader
+         * always does now; --barrier has no equivalent and, having a '=',
+         * would otherwise be taken silently as an OLD=NEW remap. */
+        if (strcmp(argv[j], "--native") == 0)
+            WARN("--native is obsolete (the loader always runs natively), ignored");
+        else if (strncmp(argv[j], "--barrier", 9) == 0)
+            DIE("--barrier was removed with the in-gem5 loader mode");
         else if (strchr(argv[j], '=')) remaps[nremaps++] = argv[j];
         else {
             log_str("[loader] FATAL: unknown argument (remaps are OLD=NEW): ");
@@ -851,7 +805,7 @@ int main(int argc, char *argv[])
         log_str(fds[i].path);
         log_str("\n");
     }
-    restore_fds(fds, hdr.num_fds, remaps, nremaps, native);
+    restore_fds(fds, hdr.num_fds, remaps, nremaps);
 
     /* ---- 4. Allocate scratch page ---- */
     void *scratch = mmap(SCRATCH_VA, SCRATCH_SZ,
@@ -872,15 +826,6 @@ int main(int argc, char *argv[])
     ctx->brk_grow    = brk_grow;
     ctx->heap_start  = heap_start;
     ctx->heap_end    = heap_end;
-    ctx->native      = (uint32_t)native;
-
-    if (barrier) {
-        const char *colon = strrchr(barrier, ':');
-        if (!colon || (size_t)(colon - barrier) >= sizeof(ctx->barrier_path))
-            DIE("--barrier expects FILE:N");
-        memcpy(ctx->barrier_path, barrier, (size_t)(colon - barrier));
-        ctx->barrier_n = (uint32_t)strtoul(colon + 1, NULL, 10);
-    }
 
     size_t tramp_sz = (size_t)(rmc_tramp_end - rmc_tramp_start);
     ctx->tramp = (char *)scratch + SCRATCH_TRAMP_OFF;
@@ -888,16 +833,12 @@ int main(int argc, char *argv[])
     uint64_t v;
     v = fix_brk;
     memcpy(ctx->tramp + (rmc_tramp_brk - rmc_tramp_start), &v, 8);
-    v = native ? 0 : 1;
-    memcpy(ctx->tramp + (rmc_tramp_m5 - rmc_tramp_start), &v, 8);
     v = hdr.roi_entry_rip;
     memcpy(ctx->tramp + (rmc_tramp_rip - rmc_tramp_start), &v, 8);
     v = (uint64_t)(uintptr_t)ckpt_data;
     memcpy(ctx->tramp + (rmc_tramp_ckpt - rmc_tramp_start), &v, 8);
     v = map_len;
     memcpy(ctx->tramp + (rmc_tramp_ckpt_len - rmc_tramp_start), &v, 8);
-
-    if (native) LOG("--native: m5_exit will be skipped");
 
     /* Scratch stack top = end of scratch page */
     void *scratch_top = (char *)scratch + SCRATCH_STACK_OFF;

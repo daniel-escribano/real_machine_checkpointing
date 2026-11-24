@@ -7,8 +7,9 @@
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 GEM5_BIN="${GEM5_BIN:-$HOME/gap_gem5/gem5/build/X86/gem5.opt}"
-# LOADER restaura checkpoints no PIE; LOADER_PIE los PIE (SPEC, la mayoria de
-# apps dinamicas). Las configs de gem5 eligen entre ambos segun el checkpoint.
+# Restauracion nativa (en el host): LOADER para checkpoints no PIE, LOADER_PIE
+# para los PIE. En gem5, LOADER solo indica la ISA/SO del Process: gem5
+# instala el checkpoint directamente y no ejecuta el loader.
 LOADER="${LOADER:-$REPO/build/loader}"
 LOADER_PIE="${LOADER_PIE:-$REPO/build/loader_pie}"
 LIBCKPT="${LIBCKPT:-$REPO/build/libckpt.so}"

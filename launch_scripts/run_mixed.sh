@@ -3,16 +3,15 @@
 #
 #   ./run_mixed.sh <tag> <maxinsts> <timing|atomic> [--pmu] <ckpt1> [ckpt2 ...]
 #
+# gem5 instala los checkpoints (restauracion directa) y la O3 arranca ya en el
+# ROI. RMC_WARMUP=N: antes, N instrucciones en la CPU simple (timing|atomic)
+# para calentar caches y TLB.
+#
 # Un checkpoint  -> single-thread.
 # N checkpoints  -> SMT-N multiprogramado sobre un mismo nucleo O3.
 #
-# RMC_RESTORE=auto|direct|loader (auto): direct = gem5 instala el checkpoint
-# sin simular el loader y la O3 arranca ya en el ROI; loader = el loader en la
-# CPU simple (timing|atomic) y switch a O3 en su m5_exit. RMC_WARMUP=N: en
-# directo, N instrucciones en la CPU simple antes de pasar a O3.
-#
 # Variables de entorno: GEM5_BIN, LOADER, CKPT_DIR, OUT_BASE, LOADER_OPTS,
-# RMC_RESTORE, RMC_WARMUP.
+# RMC_WARMUP.
 # Remapeos de rutas: los <ckpt>.remap que deja regenerate_ckpt_noavx.sh
 # --upload junto a cada checkpoint (mas LOADER_OPTS="OLD=NEW ...").
 #
@@ -25,7 +24,7 @@ check_built
 
 TAG=${1:?falta el tag}; shift
 MAXINSTS=${1:?falta maxinsts}; shift
-LOADCPU=${1:?falta load-cpu (timing|atomic)}; shift
+LOADCPU=${1:?missing the warm-up CPU (timing|atomic)}; shift
 PMU=""
 if [ "${1:-}" = "--pmu" ]; then PMU="--pmu"; shift; fi
 [ $# -eq 0 ] && die "at least one checkpoint is required"
@@ -47,7 +46,7 @@ rm -f "$OUTDIR"/CPU_*.csv
 echo "=================================================="
 echo " tag        : $TAG"
 echo " checkpoints: $CKPTS"
-echo " restore    : ${RMC_RESTORE:-auto}   load/warm-up: $LOADCPU  (${RMC_WARMUP:-0} insts)"
+echo " restore    : direct   warm-up: $LOADCPU  (${RMC_WARMUP:-0} insts)"
 echo " ROI        : DerivO3CPU + caches L1/L2  $PMU"
 echo " maxinsts   : $MAXINSTS (per thread)"
 echo " remaps     : ${REMAPS:-(none)}"
@@ -57,10 +56,9 @@ echo "=================================================="
 cd "$OUTDIR"
 "$GEM5_BIN" --outdir="$OUTDIR" "$REPO/gem5_configs/x86_mixed.py" \
     --loader="$(realpath "$LOADER")" \
-    --loader-pie="$(realpath "$LOADER_PIE")" \
     --ckpts $CKPTS \
     --load-cpu="$LOADCPU" \
-    --restore="${RMC_RESTORE:-auto}" --warmup="${RMC_WARMUP:-0}" \
+    --warmup="${RMC_WARMUP:-0}" \
     --maxinsts="$MAXINSTS" --loader-opts="$REMAPS" $PMU
 RC=$?
 

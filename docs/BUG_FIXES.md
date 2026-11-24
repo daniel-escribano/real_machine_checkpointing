@@ -1,5 +1,7 @@
 # Bugs corregidos en la rama `bug-fixes`
 
+> **24-11-2026:** el loader ya no se ejecuta dentro de gem5 (solo restauracion directa); los arreglos 7 (`--native`) y 10 (barrera SMT) se retiraron con ese modo. El loader queda como restaurador nativo.
+
 Lista de los fallos encontrados en `master` (analisis estatico + pruebas en
 maquina real), con su causa, su arreglo y como se ha comprobado. La forma de
 verificarlos **en gem5** esta en [`VERIFICACION_GEM5.md`](VERIFICACION_GEM5.md).
