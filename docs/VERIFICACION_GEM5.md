@@ -60,7 +60,7 @@ restaurado por gem5 da la misma salida:
 | `redzone` | PIE, volcado por senal en una funcion hoja | >= 2 `REDZONE round N ok` y ningun `REDZONE CORRUPT` | 1 |
 | `signal_malloc` | PIE, volcado por senal dentro de malloc | >= 2 `MALLOC chunk N ok` sin abortos de glibc | 2, 4 (ampliacion del break, `loader_pie`) |
 | `vdso` | PIE | >= 2 `CLOCK round N ok` y ningun `CLOCK STUCK` | 11 |
-| `smt2` | `redzone` + `signal_malloc` en SMT-2 (O3) | loader: `SMT barrier passed` en los dos procesos, cada uno con su loader; directa: los dos procesos instalados (`-> directa`) y el ROI en O3 sin errores | 4, 10 |
+| `smt2` | `redzone` + `signal_malloc` en SMT-2 (O3) | loader: `SMT barrier passed` en los dos procesos, cada uno con su loader; directa: los dos procesos instalados (`-> direct`) y el ROI en O3 sin errores | 4, 10 |
 | `spec_<b>` | cada benchmark rate preparado (`--spec all`), comando de su `speccmds.cmd` | llega a `--spec-insts` instrucciones de ROI | todo el flujo, cwd y remapeo de SPEC |
 
 Las pruebas que no terminan solas (`redzone`, `signal_malloc`, `vdso`) se
@@ -127,7 +127,7 @@ En `sys.trace`, el `mmap` del fichero del checkpoint devuelve una direccion
 
 ### SMT (bug 10)
 
-En `results/smt2/gem5.log`, las lineas `[loader k/2] listo ... insts=[a, b]`:
+En `results/smt2/gem5.log`, las lineas `[loader k/2] ready ... insts=[a, b]`:
 lo que avanza cada hilo entre el primer y el ultimo `m5_exit` es ROI en la
 CPU simple; con la barrera son miles de instrucciones, sin ella todo lo que
 tardara el otro loader en restaurar.
@@ -145,5 +145,6 @@ gem5dbg $W/trunc.ckpt 1000 | grep FATAL      # Corrupt or truncated checkpoint
 ```bash
 $R/launch_scripts/regenerate_ckpt_noavx.sh all        # formato v2 (los v1 se rechazan)
 $R/launch_scripts/run_st_timing.sh $CKPT_DIR/dump_mcf_r_noavx.ckpt 10000000 atomic
-$R/launch_scripts/run_10M_suite.sh
+$R/launch_scripts/run_mixed.sh smt2_mcf_perl 10000000 timing --pmu \
+    $CKPT_DIR/dump_mcf_r_noavx.ckpt $CKPT_DIR/dump_perlbench_noavx.ckpt
 ```

@@ -21,7 +21,29 @@ OUT_BASE="${OUT_BASE:-$HOME/TFM/m5out}"
 # que gem5 SE si implementa.
 RMC_NOAVX_TUNABLES="glibc.cpu.hwcaps=-SSE4_2,-SSE4_1,-SSSE3,-AVX,-AVX2,-AVX512F,-AVX_Usable,-AVX2_Usable,-AVX512F_Usable,-AVX_Fast_Unaligned_Load"
 
-die() { echo "ERROR: $*" >&2; exit 1; }
+# Message convention (same as the C code):  [component] LEVEL: message
+#   log_info  no level label     log_warn  "WARN: "
+#   log_error "ERROR: "          die       "FATAL: " and exit 1
+# All of them write to stderr. The component is $LOG_COMPONENT, which each
+# script may set after sourcing this file; by default, the script name
+# without ".sh".
+LOG_COMPONENT="${LOG_COMPONENT:-$(basename "$0" .sh)}"
+log_info() {
+    printf '[%s] %s\n' "$LOG_COMPONENT" "$*" >&2
+}
+
+log_warn() {
+    printf '[%s] WARN: %s\n' "$LOG_COMPONENT" "$*" >&2
+}
+
+log_error() {
+    printf '[%s] ERROR: %s\n' "$LOG_COMPONENT" "$*" >&2
+}
+
+die() {
+    printf '[%s] FATAL: %s\n' "$LOG_COMPONENT" "$*" >&2
+    exit 1
+}
 
 # Remapeos de rutas para el loader (OLD=NEW separados por espacios):
 # LOADER_OPTS mas el <ckpt>.remap que deja junto a cada checkpoint
@@ -35,6 +57,6 @@ ckpt_remaps() {   # ckpt_remaps <ckpt>...
 }
 
 check_built() {
-    [ -x "$LOADER" ]     || die "no existe $LOADER  (ejecuta: make -C $REPO)"
-    [ -x "$LOADER_PIE" ] || die "no existe $LOADER_PIE  (ejecuta: make -C $REPO)"
+    [ -x "$LOADER" ]     || die "$LOADER not found (run: make -C $REPO)"
+    [ -x "$LOADER_PIE" ] || die "$LOADER_PIE not found (run: make -C $REPO)"
 }

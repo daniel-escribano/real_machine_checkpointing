@@ -129,6 +129,10 @@ static void log_hex64(uint64_t v)
 
 #define DIE(msg)  do { log_str("[loader] FATAL: " msg "\n"); _Exit(1); } while(0)
 #define LOG(msg)  do { log_str("[loader] " msg "\n"); } while(0)
+#define WARN(msg) do { log_str("[loader] WARN: " msg "\n"); } while(0)
+/* FATAL with the errno cause; replaces perror() + return 1 in main() */
+#define DIE_ERRNO(msg) do { log_str("[loader] FATAL: " msg ": "); \
+                            log_str(strerror(errno)); log_str("\n"); _Exit(1); } while(0)
 
 /* ------------------------------------------------------------------ */
 /*  Exact-read helper                                                    */
@@ -293,12 +297,12 @@ static void patch_vdso(uint8_t *base, size_t size)
     if (size < sizeof(*eh) ||
         eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E' ||
         eh->e_ident[2] != 'L'  || eh->e_ident[3] != 'F') {
-        LOG("WARNING: [vdso] is not an ELF image, not patched");
+        WARN("[vdso] is not an ELF image, not patched");
         return;
     }
     if (eh->e_shoff == 0 ||
         eh->e_shoff + (uint64_t)eh->e_shnum * sizeof(Elf64_Shdr) > size) {
-        LOG("WARNING: [vdso] section headers not mapped, not patched");
+        WARN("[vdso] section headers not mapped, not patched");
         return;
     }
 
@@ -352,8 +356,8 @@ static void patch_vdso(uint8_t *base, size_t size)
 static void smt_barrier(restore_ctx_t *ctx)
 {
     int bfd = open(ctx->barrier_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (bfd < 0) { LOG("WARNING: cannot open barrier file, not waiting"); return; }
-    if (write(bfd, "x", 1) != 1) LOG("WARNING: barrier write failed");
+    if (bfd < 0) { WARN("cannot open barrier file, not waiting"); return; }
+    if (write(bfd, "x", 1) != 1) WARN("barrier write failed");
     close(bfd);
 
     struct stat st;
@@ -385,7 +389,7 @@ static void restore_and_jump(restore_ctx_t *ctx)
     if (ctx->brk_grow) {
         uint64_t got = (uint64_t)syscall(SYS_brk, ctx->brk_grow);
         if (got != ctx->brk_grow)
-            LOG("WARNING: could not grow the program break to the target heap end");
+            WARN("could not grow the program break to the target heap end");
     }
 
     for (uint32_t i = 0; i < ctx->num_regions; i++) {
@@ -410,7 +414,7 @@ static void restore_and_jump(restore_ctx_t *ctx)
                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
                        -1, 0);
         if (m == MAP_FAILED || m != (void *)(uintptr_t)d->start) {
-            log_str("[loader] mmap failed in restore_and_jump! start=");
+            log_str("[loader] ERROR: mmap failed in restore_and_jump, start=");
             log_hex64(d->start);
             log_str(" sz=");
             log_hex64(sz);
@@ -437,7 +441,7 @@ static void restore_and_jump(restore_ctx_t *ctx)
                  (prctl(PR_SET_MM, PR_SET_MM_START_BRK, ctx->heap_start, 0, 0) == 0 &&
                   prctl(PR_SET_MM, PR_SET_MM_BRK, ctx->heap_end, 0, 0) == 0);
         if (!ok)
-            LOG("WARNING: --native could not move the program break (needs "
+            WARN("--native could not move the program break (needs "
                 "CAP_SYS_RESOURCE); malloc may fail once the heap grows or shrinks");
     }
 
@@ -575,7 +579,7 @@ static void restore_fds(const ckpt_fd_t *fds, uint32_t num_fds,
              * of gem5 itself (and the PMU CSVs it writes with relative
              * paths). Natively the loader applies it. */
             if (native && chdir(path) < 0) {
-                log_str("[loader] WARNING: cannot chdir to the checkpoint cwd: ");
+                log_str("[loader] WARN: cannot chdir to the checkpoint cwd: ");
                 log_str(path);
                 log_str("\n");
             }
@@ -595,7 +599,7 @@ static void restore_fds(const ckpt_fd_t *fds, uint32_t num_fds,
             /* Output files: sinkholed, the ROI must not clobber results */
             target_fd = open("/dev/null", O_WRONLY);
         } else if (!regular) {
-            log_str("[loader] WARNING: fd ");
+            log_str("[loader] WARN: fd ");
             log_hex64((uint64_t)cfd->fd);
             log_str(" is not a regular file, not restored: ");
             log_str(path);
@@ -603,7 +607,7 @@ static void restore_fds(const ckpt_fd_t *fds, uint32_t num_fds,
             continue;
         } else {
             if (acc == O_RDWR) {
-                log_str("[loader] WARNING: fd ");
+                log_str("[loader] WARN: fd ");
                 log_hex64((uint64_t)cfd->fd);
                 log_str(" reopened read-write, the simulation may modify ");
                 log_str(path);
@@ -613,7 +617,7 @@ static void restore_fds(const ckpt_fd_t *fds, uint32_t num_fds,
         }
 
         if (target_fd < 0) {
-            log_str("[loader] WARNING: failed to restore fd ");
+            log_str("[loader] WARN: failed to restore fd ");
             log_hex64((uint64_t)cfd->fd);
             log_str(": ");
             log_str(path);
@@ -622,7 +626,7 @@ static void restore_fds(const ckpt_fd_t *fds, uint32_t num_fds,
         }
         if (target_fd != cfd->fd) {
             if (dup2(target_fd, cfd->fd) < 0) {
-                log_str("[loader] WARNING: dup2 failed for fd ");
+                log_str("[loader] WARN: dup2 failed for fd ");
                 log_hex64((uint64_t)cfd->fd);
                 log_str("\n");
                 close(target_fd);
@@ -631,7 +635,7 @@ static void restore_fds(const ckpt_fd_t *fds, uint32_t num_fds,
             close(target_fd);
         }
         if (acc != O_WRONLY && lseek(cfd->fd, cfd->offset, SEEK_SET) < 0) {
-            log_str("[loader] WARNING: lseek failed for fd ");
+            log_str("[loader] WARN: lseek failed for fd ");
             log_hex64((uint64_t)cfd->fd);
             log_str("\n");
         }
@@ -709,7 +713,7 @@ int main(int argc, char *argv[])
 
     LOG("Opening checkpoint...");
     int fd = open(argv[1], O_RDONLY);
-    if (fd < 0) { perror("loader: open"); return 1; }
+    if (fd < 0) DIE_ERRNO("open");
 
     /* ---- 1. Read header ---- */
     ckpt_header_t hdr;
@@ -724,7 +728,7 @@ int main(int argc, char *argv[])
     log_str("\n");
 
     struct stat st;
-    if (fstat(fd, &st) < 0) { perror("loader: fstat"); return 1; }
+    if (fstat(fd, &st) < 0) DIE_ERRNO("fstat");
     uint64_t file_size = (uint64_t)st.st_size;
     uint64_t data_off = CKPT_DATA_OFFSET((uint64_t)hdr.num_regions, (uint64_t)hdr.num_fds);
     if (data_off > file_size) DIE("Truncated checkpoint (descriptors)");
@@ -762,7 +766,7 @@ int main(int argc, char *argv[])
         hint = (tmp_descs[o].end + 0x3fffffffULL) & ~0x3fffffffULL; /* next 1 GiB */
     }
     void *ckpt_data = mmap((void *)(uintptr_t)hint, map_len, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (ckpt_data == MAP_FAILED) { perror("loader: ckpt mmap"); return 1; }
+    if (ckpt_data == MAP_FAILED) DIE_ERRNO("ckpt mmap");
     close(fd);
     free(tmp_descs);
 
@@ -812,16 +816,16 @@ int main(int argc, char *argv[])
     uint64_t fix_brk = 0, brk_grow = 0;
     cur_brk = (uint64_t)(uintptr_t)sbrk(0);
     if (!heap_end) {
-        LOG("WARNING: no [heap] region in the checkpoint, program break left as is");
+        WARN("no [heap] region in the checkpoint, program break left as is");
     } else if (heap_end < cur_brk && cur_brk - heap_end > MAX_BRK_MOVE) {
-        LOG("WARNING: target heap far below the loader break, program break left as is: "
+        WARN("target heap far below the loader break, program break left as is: "
             "restore this (non-PIE) checkpoint with build/loader");
     } else if (heap_end > cur_brk && heap_end - cur_brk > MAX_BRK_MOVE) {
-        LOG("WARNING: target heap far above the loader break, program break left as is: "
+        WARN("target heap far above the loader break, program break left as is: "
             "restore this (PIE) checkpoint with build/loader_pie");
     } else if (heap_end < cur_brk) {
         if ((o = find_overlap(descs, hdr.num_regions, heap_end, cur_brk)) >= 0) {
-            log_str("[loader] WARNING: cannot move the program break to the target heap end, "
+            log_str("[loader] WARN: cannot move the program break to the target heap end, "
                     "a region lies in between: ");
             log_str(descs[o].name);
             log_str("\n");
@@ -830,7 +834,7 @@ int main(int argc, char *argv[])
         }
     } else if (heap_end > cur_brk) {
         if ((uint64_t)(uintptr_t)ckpt_data < heap_end)
-            LOG("WARNING: checkpoint mapped below the target heap, program break left as is");
+            WARN("checkpoint mapped below the target heap, program break left as is");
         else
             brk_grow = heap_end;
     }
@@ -854,7 +858,7 @@ int main(int argc, char *argv[])
                          PROT_READ | PROT_WRITE | PROT_EXEC,
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
                          -1, 0);
-    if (scratch == MAP_FAILED) { perror("loader: scratch mmap"); return 1; }
+    if (scratch == MAP_FAILED) DIE_ERRNO("scratch mmap");
     my_memset(scratch, 0, SCRATCH_SZ);
 
     /* ---- 5. Build restore_ctx + trampoline in the scratch page ---- */

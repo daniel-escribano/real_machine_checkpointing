@@ -106,12 +106,12 @@ system.mem_ctrl.port       = system.membus.mem_side_ports
 env_list = [f"{k}={v}" for k, v in os.environ.items()]
 opts = args.options.split()
 if not opts:
-    raise SystemExit("--options debe empezar por el checkpoint")
+    raise SystemExit("[rmc] FATAL: --options must start with the checkpoint")
 # Absoluta: el proceso arranca en el cwd del checkpoint, no en el de gem5
 ckpt = os.path.abspath(opts[0])
 process, exe, cwd = make_process(ckpt, RESTORE, args.cmd, remaps=opts[1:], env=env_list)
 if RESTORE == "direct":
-    print(f"**** Restauracion directa (sin loader)   cwd: {cwd} ****", flush=True)
+    print(f"**** Direct restoration (no loader)   cwd: {cwd} ****", flush=True)
 else:
     print(f"**** Loader: {exe}   cwd: {cwd} ****", flush=True)
 system.workload     = SEWorkload.init_compatible(exe)
@@ -124,18 +124,18 @@ m5.instantiate()
 # -- Fase 1: loader ---------------------------------------------------------
 if RESTORE == "direct":
     loader_ins = 0
-    print("**** Checkpoint instalado en initState: 0 ciclos de carga ****", flush=True)
+    print("**** Checkpoint installed in initState: 0 load cycles ****", flush=True)
 else:
-    print(f"**** FASE 1: restaurando checkpoint en {args.cpu} ****", flush=True)
+    print(f"**** PHASE 1: restoring the checkpoint on {args.cpu} ****", flush=True)
     exit_event  = m5.simulate()
     cause       = exit_event.getCause()
     loader_ins  = system.cpu.getCurrentInstCount(0)
-    print(f"**** Loader terminado: '{cause}' tras {loader_ins} instrucciones "
+    print(f"**** Loader finished: '{cause}' after {loader_ins} instructions "
           f"(tick {m5.curTick()}) ****", flush=True)
 
     if cause != "m5_exit instruction encountered":
-        print("!!! El loader NO llego a la frontera del ROI (falta el m5_exit "
-              "o fallo antes). No se simula el ROI.", flush=True)
+        print("[rmc] ERROR: the loader did NOT reach the ROI boundary (no m5_exit, "
+              "or it failed earlier). The ROI is not simulated.", flush=True)
         print(f"Exited @ tick {m5.curTick()} because {cause}")
         raise SystemExit(1)
 
@@ -146,13 +146,13 @@ if args.trace_roi:
     # instrucciones del loader.
     from m5.debug import flags
     flags["Exec"].enable()
-    print("**** Traza Exec activada para el ROI ****", flush=True)
+    print("**** Exec trace enabled for the ROI ****", flush=True)
 system.cpu.scheduleInstStop(0, args.maxinsts, f"ROI: {args.maxinsts} instrucciones alcanzadas")
 
-print(f"**** FASE 2: simulando {args.maxinsts} instrucciones de ROI ****", flush=True)
+print(f"**** PHASE 2: simulating {args.maxinsts} ROI instructions ****", flush=True)
 exit_event = m5.simulate()
 roi_ins    = system.cpu.getCurrentInstCount(0) - loader_ins
 
-print(f"**** ROI terminado: '{exit_event.getCause()}' ****", flush=True)
-print(f"**** Instrucciones de ROI ejecutadas: {roi_ins} / {args.maxinsts} ****", flush=True)
+print(f"**** ROI finished: '{exit_event.getCause()}' ****", flush=True)
+print(f"**** ROI instructions executed: {roi_ins} / {args.maxinsts} ****", flush=True)
 print(f"Exited @ tick {m5.curTick()} because {exit_event.getCause()}")

@@ -15,7 +15,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 check_built
 
 CKPT=${1:?falta el checkpoint}
-[ -f "$CKPT" ] || die "no existe el checkpoint $CKPT"
+[ -f "$CKPT" ] || die "checkpoint $CKPT not found"
 CKPT="$(realpath "$CKPT")"
 MAXINSTS=${2:-1000000}
 CPU=${3:-timing}
@@ -27,7 +27,7 @@ mkdir -p "$OUTDIR"
 
 echo "=================================================="
 echo " checkpoint : $CKPT"
-echo " cpu        : $CPU   maxinsts: $MAXINSTS $EXTRA   restaura: ${RMC_RESTORE:-auto}"
+echo " cpu        : $CPU   maxinsts: $MAXINSTS $EXTRA   restore: ${RMC_RESTORE:-auto}"
 echo " outdir     : $OUTDIR"
 echo "=================================================="
 

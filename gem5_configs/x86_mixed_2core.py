@@ -195,8 +195,8 @@ def build_core(idx, nt, ckpts):
     for i, ck in enumerate(ckpts):
         proc, ld, cwd = make_process(ck, RESTORE, args.loader, args.loader_pie, REMAPS,
                                      LOADER_EXTRA, pid=100 + idx * 10 + i, env=env_list)
-        via = "directa" if DIRECT else os.path.basename(ld)
-        print(f"  nucleo{idx} hilo{i}: {os.path.basename(ck)} -> {via}  cwd={cwd}", flush=True)
+        via = "direct" if DIRECT else os.path.basename(ld)
+        print(f"  core{idx} thread{i}: {os.path.basename(ck)} -> {via}  cwd={cwd}", flush=True)
         procs.append(proc)
 
     cpu.workload = procs
@@ -253,10 +253,10 @@ CORES = [(0, None if O3_ACTIVE else system.cpu0, system.o3_0, NT0, args.ckpts0),
 NT_TOTAL = NT0 + NT1
 
 if DIRECT:
-    print(f"**** {NT_TOTAL} checkpoints instalados en initState: 0 ciclos de carga ****",
+    print(f"**** {NT_TOTAL} checkpoints installed in initState: 0 load cycles ****",
           flush=True)
 else:
-    print(f"**** FASE 1: {NT_TOTAL} loader(es) en {args.load_cpu} (2 nucleos) ****", flush=True)
+    print(f"**** PHASE 1: {NT_TOTAL} loader(s) on {args.load_cpu} (2 cores) ****", flush=True)
 
 # Lista plana de (cpu_simple, tid) de todos los hilos, en orden.
 ALL_THREADS = [(cpu_simple, t)
@@ -288,11 +288,11 @@ elif args.seq_load:
         ev = m5.simulate()
         cause = ev.getCause()
         if cause != "m5_exit instruction encountered":
-            print(f"!!! Evento inesperado durante la carga: '{cause}' @ {m5.curTick()}", flush=True)
+            print(f"[rmc] ERROR: unexpected event while loading: '{cause}' @ {m5.curTick()}", flush=True)
             raise SystemExit(1)
-        print(f"  [loader {i + 1}/{NT_TOTAL}] listo en tick {m5.curTick()}", flush=True)
+        print(f"  [loader {i + 1}/{NT_TOTAL}] ready at tick {m5.curTick()}", flush=True)
 
-    print("**** Todos los checkpoints restaurados secuencialmente ****", flush=True)
+    print("**** All checkpoints restored sequentially ****", flush=True)
 else:
     done = 0
     while done < NT_TOTAL:
@@ -300,68 +300,68 @@ else:
         cause = ev.getCause()
         if cause == "m5_exit instruction encountered":
             done += 1
-            print(f"  [loader {done}/{NT_TOTAL}] listo en tick {m5.curTick()}", flush=True)
+            print(f"  [loader {done}/{NT_TOTAL}] ready at tick {m5.curTick()}", flush=True)
         else:
-            print(f"!!! Evento inesperado durante la carga: '{cause}' @ {m5.curTick()}", flush=True)
+            print(f"[rmc] ERROR: unexpected event while loading: '{cause}' @ {m5.curTick()}", flush=True)
             raise SystemExit(1)
 
 for core_idx, cpu_simple, cpu_o3, nt, ckpts in CORES:
     if DIRECT:
         break
     loaded = [cpu_simple.getCurrentInstCount(t) for t in range(nt)]
-    print(f"**** Carga completa nucleo {core_idx}. Instrucciones por hilo: {loaded} ****", flush=True)
+    print(f"**** Load complete on core {core_idx}. Instructions per thread: {loaded} ****", flush=True)
 
 if args.no_switch:
     # Diagnostico: ejecutar la ROI en la propia CPU simple, sin conmutar. Sirve
     # para separar "el montaje de 2 nucleos esta mal" de "el fallo esta en
     # m5.switchCpus() con dos nucleos".
-    print("**** SIN CONMUTAR: la ROI se ejecuta en la CPU simple ****", flush=True)
+    print("**** NO SWITCH: the ROI runs on the simple CPU ****", flush=True)
     ROI_CPUS = [(idx, cpu_simple, nt, ckpts) for idx, cpu_simple, _, nt, ckpts in CORES]
 elif O3_ACTIVE:
-    print("**** ROI en DerivO3CPU desde el tick 0 (restauracion directa) ****", flush=True)
+    print("**** ROI on DerivO3CPU from tick 0 (direct restoration) ****", flush=True)
     ROI_CPUS = [(idx, cpu_o3, nt, ckpts) for idx, _, cpu_o3, nt, ckpts in CORES]
 else:
-    print("**** Cambiando ambos nucleos a DerivO3CPU"
-          f"{'' if args.no_caches else ' (con caches L1/L2 privadas)'} ****", flush=True)
+    print("**** Switching both cores to DerivO3CPU"
+          f"{'' if args.no_caches else ' (with private L1/L2 caches)'} ****", flush=True)
     m5.switchCpus(system, [(system.cpu0, system.o3_0), (system.cpu1, system.o3_1)])
     ROI_CPUS = [(idx, cpu_o3, nt, ckpts) for idx, _, cpu_o3, nt, ckpts in CORES]
 m5.stats.reset()
 
 if args.calib_ticks:
-    print(f"**** CALIBRACION: {args.calib_ticks} ticks con los {NT_TOTAL} hilos activos ****", flush=True)
+    print(f"**** CALIBRATION: {args.calib_ticks} ticks with all {NT_TOTAL} threads active ****", flush=True)
     m5.simulate(args.calib_ticks)
-    print("**** Instrucciones completadas por hilo (contencion plena) ****", flush=True)
+    print("**** Instructions completed per thread (full contention) ****", flush=True)
     for core_idx, roi_cpu, nt, ckpts in ROI_CPUS:
         for t in range(nt):
             n = roi_cpu.getCurrentInstCount(t)
-            print(f"  nucleo{core_idx} hilo{t} ({os.path.basename(ckpts[t])}): {n}", flush=True)
+            print(f"  core{core_idx} thread{t} ({os.path.basename(ckpts[t])}): {n}", flush=True)
     raise SystemExit(0)
 
 TARGETS = ([int(x) for x in args.maxinsts_list.split(",")]
            if args.maxinsts_list else [args.maxinsts] * NT_TOTAL)
 if len(TARGETS) != NT_TOTAL:
-    raise SystemExit(f"--maxinsts-list necesita {NT_TOTAL} valores, dados {len(TARGETS)}")
+    raise SystemExit(f"[rmc] FATAL: --maxinsts-list needs {NT_TOTAL} values, got {len(TARGETS)}")
 
 k = 0
 for core_idx, roi_cpu, nt, ckpts in ROI_CPUS:
     for t in range(nt):
         roi_cpu.scheduleInstStop(
             t, TARGETS[k],
-            f"ROI core{core_idx} hilo{t} alcanzo {TARGETS[k]} instrucciones")
+            f"ROI core{core_idx} thread{t} reached {TARGETS[k]} instructions")
         k += 1
 
-print(f"**** FASE 2: ROI en {'CPU simple' if args.no_switch else 'O3'}, "
-      f"{args.maxinsts} instrucciones por hilo, "
-      f"{NT_TOTAL} hilos en 2 nucleos ****", flush=True)
+print(f"**** PHASE 2: ROI on {'the simple CPU' if args.no_switch else 'O3'}, "
+      f"{args.maxinsts} instructions per thread, "
+      f"{NT_TOTAL} threads on 2 cores ****", flush=True)
 
-CAUSE_RE = re.compile(r"^ROI core(\d+) hilo(\d+) alcanzo")
+CAUSE_RE = re.compile(r"^ROI core(\d+) thread(\d+) reached")
 remaining = NT_TOTAL
 while remaining > 0:
     ev    = m5.simulate()
     cause = ev.getCause()
     m = CAUSE_RE.match(cause)
     if not m:
-        print(f"!!! Evento inesperado durante el ROI: '{cause}' @ tick {m5.curTick()}", flush=True)
+        print(f"[rmc] ERROR: unexpected event during the ROI: '{cause}' @ tick {m5.curTick()}", flush=True)
         raise SystemExit(1)
     core_idx, tid = int(m.group(1)), int(m.group(2))
     if args.no_switch:
@@ -371,13 +371,13 @@ while remaining > 0:
     insts_now = cpu_o3.getCurrentInstCount(tid)
     cpu_o3.suspendContext(tid)
     remaining -= 1
-    print(f"  -> {cause} (tick {m5.curTick()}, {insts_now} insts) -- hilo suspendido, "
-          f"quedan {remaining} activos", flush=True)
+    print(f"  -> {cause} (tick {m5.curTick()}, {insts_now} insts) -- thread suspended, "
+          f"{remaining} still active", flush=True)
 
-print(f"**** ROI terminado: los {NT_TOTAL} hilos alcanzaron su objetivo. tick final {m5.curTick()} ****",
+print(f"**** ROI finished: all {NT_TOTAL} threads reached their target. final tick {m5.curTick()} ****",
       flush=True)
 for core_idx, _, cpu_o3, nt, ckpts in CORES:
     for t in range(nt):
         insts = cpu_o3.getCurrentInstCount(t)
-        print(f"     nucleo{core_idx} hilo{t} ({os.path.basename(ckpts[t])}): "
-              f"{insts} instrucciones de ROI", flush=True)
+        print(f"     core{core_idx} thread{t} ({os.path.basename(ckpts[t])}): "
+              f"{insts} ROI instructions", flush=True)

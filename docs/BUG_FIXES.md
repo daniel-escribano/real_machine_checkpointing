@@ -174,7 +174,7 @@ eliminado. Queda un camino por tarea: compilar SPEC con
 |---|---|---|
 | `launch_scripts/install_on_altek.sh` | `make -C $DEST $DEST/build/loader`: targets con ruta absoluta -> `No rule to make target`, oculto por `\| tail` | targets relativos, `pipefail`, comprueba los binarios |
 | `launch_scripts/run_mixed.sh` | `cd $OUTDIR` antes de gem5: checkpoints relativos no se encuentran | `realpath` |
-| `launch_scripts/run_10M_suite.sh` | `dump_perlbench_noavx_build.ckpt` no lo genera nadie | `dump_perlbench_noavx.ckpt` y comprobacion |
+| `launch_scripts/run_10M_suite.sh` (retirado el 2026-11-24) | `dump_perlbench_noavx_build.ckpt` no lo genera nadie | `dump_perlbench_noavx.ckpt` y comprobacion |
 | `launch_scripts/regenerate_ckpt_noavx.sh` | ver bug 6; sin `setarch -R`; `kill` al subshell y no al benchmark | espera correcta, `setarch -R env ...`, `exec` |
 | `test/run_test.sh` | remapeo sin `=`; `rm` de un fichero inexistente con `set -e`; modificaba `test/new_dir/input1.txt` versionado | reescrito en un directorio temporal |
 | `run_example.sh` | loader nativo -> SIGILL; compilacion a mano sin `dumper_asm.S` | `--native`, `make` |

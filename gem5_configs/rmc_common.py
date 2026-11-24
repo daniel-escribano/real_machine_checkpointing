@@ -82,8 +82,8 @@ def process_cwd(ckpt, remaps):
         return os.getcwd()
     cwd = apply_remaps(cwd, remaps)
     if not os.path.isdir(cwd):
-        print(f"AVISO: el cwd del checkpoint no existe aqui ({cwd}); "
-              f"se usa {os.getcwd()}. Anade un remapeo OLD=NEW.", flush=True)
+        print(f"[rmc] WARN: the checkpoint cwd does not exist here ({cwd}); "
+              f"using {os.getcwd()}. Add an OLD=NEW remap.", flush=True)
         return os.getcwd()
     return cwd
 
@@ -103,8 +103,8 @@ def resolve_restore(mode):
     if mode == "auto":
         return "direct" if has else "loader"
     if mode == "direct" and not has:
-        raise SystemExit("--restore direct: este gem5 no tiene Process.rmcCheckpoint "
-                         "(compila el gem5 del GAP con la restauracion directa, o usa "
+        raise SystemExit("[rmc] FATAL: --restore direct: this gem5 has no Process.rmcCheckpoint "
+                         "(build the GAP gem5 with direct restoration, or use "
                          "--restore loader)")
     return mode
 
@@ -145,7 +145,7 @@ if __name__ == "__main__":
     # Uso desde scripts: rmc_common.py <ckpt> [build_dir] -> ruta del loader
     import sys
     if len(sys.argv) < 2:
-        sys.exit("uso: rmc_common.py <ckpt> [build_dir]")
+        sys.exit("usage: rmc_common.py <ckpt> [build_dir]")
     build = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "build")
     print(os.path.normpath(pick_loader(sys.argv[1], os.path.join(build, "loader"))))

@@ -44,6 +44,7 @@
 #include <ucontext.h>
 #include <errno.h>
 #include "checkpoint.h"
+#define CKPT_LOG_COMPONENT "libckpt"   /* prefix of every CKPT_* message */
 #include "dumper.h"
 
 /* ------------------------------------------------------------------ */
@@ -73,7 +74,7 @@ static void page_set_writable(void *addr, int writable)
     uintptr_t page = (uintptr_t)addr & ~(uintptr_t)(getpagesize() - 1);
     int prot = PROT_READ | PROT_EXEC | (writable ? PROT_WRITE : 0);
     if (mprotect((void *)page, getpagesize(), prot) != 0)
-        ckpt_log("[libckpt] mprotect failed\n");
+        CKPT_ERROR("mprotect: %s", strerror(errno));
 }
 
 /* ------------------------------------------------------------------ */
@@ -123,15 +124,15 @@ static void do_dump_from_ucontext(ucontext_t *uc)
 #endif
 
     /* We are inside a signal handler: only async-signal-safe logging */
-    ckpt_log("[libckpt] Dumping checkpoint to: %s\n", g_output_path);
-    ckpt_log("[libckpt] RIP=0x%lx  RSP=0x%lx\n", regs.rip, regs.rsp);
+    CKPT_INFO("Dumping checkpoint to: %s", g_output_path);
+    CKPT_INFO("RIP=0x%lx  RSP=0x%lx", regs.rip, regs.rsp);
 
     int rc = ckpt_dump_impl(g_output_path, &regs);
     if (rc != 0) {
-        ckpt_log("[libckpt] ERROR: ckpt_dump_impl returned %d\n", rc);
+        CKPT_ERROR("ckpt_dump_impl returned %d", rc);
         _exit(1);
     } else {
-        ckpt_log("[libckpt] Done! Resuming application.\n");
+        CKPT_INFO("Done! Resuming application.");
         return;
     }
 }
@@ -170,7 +171,7 @@ static void sigtrap_handler(int sig, siginfo_t *info, void *ctx)
 
     if ((void *)bp_addr != g_sym_addr) {
         /* Not our breakpoint -- let default handler take it */
-        ckpt_log("[libckpt] SIGTRAP at unexpected addr 0x%lx, aborting\n",
+        CKPT_FATAL("SIGTRAP at unexpected addr 0x%lx, re-raising with the default action",
                  (unsigned long)bp_addr);
         struct sigaction dfl = { .sa_handler = SIG_DFL };
         sigaction(SIGTRAP, &dfl, NULL);
@@ -179,7 +180,7 @@ static void sigtrap_handler(int sig, siginfo_t *info, void *ctx)
     }
 
     int call_no = atomic_fetch_add(&g_sym_call_count, 1) + 1;
-    ckpt_log("[libckpt] Symbol '%s' call #%d (target=%d)\n",
+    CKPT_INFO("Symbol '%s' call #%d (target=%d)",
              g_sym_name, call_no, g_sym_target_call);
 
     /* Always restore the original byte first so the function can run */
@@ -342,8 +343,7 @@ static void *elf_find_symbol(const char *exe_path, const char *name)
         if (strcmp(sname, name) == 0) {
             uintptr_t val  = (uintptr_t)syms[i].st_value;
             uintptr_t addr = val + slide;
-            fprintf(stderr,
-                    "[libckpt] Found '%s' via ELF symtab: val=0x%lx slide=0x%lx -> %p\n",
+            CKPT_INFO("Found '%s' via ELF symtab: val=0x%lx slide=0x%lx -> %p",
                     name, val, slide, (void *)addr);
             result = (void *)addr;
             break;
@@ -388,11 +388,11 @@ static void install_symbol_hook(void)
 {
     g_sym_addr = resolve_symbol(g_sym_name);
     if (!g_sym_addr) {
-        fprintf(stderr, "[libckpt] WARNING: symbol '%s' not found\n", g_sym_name);
+        CKPT_WARN("symbol '%s' not found", g_sym_name);
         return;
     }
 
-    fprintf(stderr, "[libckpt] Hooking '%s' @ %p (will fire on call #%d)\n",
+    CKPT_INFO("Hooking '%s' @ %p (will fire on call #%d)",
             g_sym_name, g_sym_addr, g_sym_target_call);
 
     /* Save original first byte */
@@ -410,31 +410,13 @@ static void install_symbol_hook(void)
     *(uint8_t *)g_sym_addr = 0xCC;
     page_set_writable(g_sym_addr, 0);
 
-    fprintf(stderr, "[libckpt] INT3 installed at %p (orig byte=0x%02x)\n",
+    CKPT_INFO("INT3 installed at %p (orig byte=0x%02x)",
             g_sym_addr, g_sym_orig[0]);
 }
 
 /* ------------------------------------------------------------------ */
 /*  Timer: raise SIGUSR1 after CKPT_AFTER_NS nanoseconds               */
 /* ------------------------------------------------------------------ */
-
-/* OBSOLETE (stage 2): the timer thread was replaced by arm_dump_timer()
- * below; kept commented only as a reference (see git history). */
-// static void *timer_thread(void *arg)
-// {
-//     (void)arg;
-//     struct timespec ts = {
-//         .tv_sec  = (time_t)(g_after_ns / 1000000000ULL),
-//         .tv_nsec = (long)  (g_after_ns % 1000000000ULL),
-//     };
-//     nanosleep(&ts, NULL);
-
-//     if (!atomic_load(&g_dumped))
-//         pthread_kill(g_main_tid, SIGUSR1);  /* signal the MAIN thread so it
-//                                              * blocks in the handler while
-//                                              * we capture its CPU state */
-//     return NULL;
-// }
 
 /* arm_dump_timer: arma un temporizador POSIX de un solo disparo que envia SIGUSR1
  *   al hilo actual pasados `ns` nanosegundos (CLOCK_MONOTONIC, relativo).
@@ -454,7 +436,7 @@ static int arm_dump_timer(uint64_t ns, pid_t *tid_out){
     timer_t timerid;
     if (timer_create(CLOCK_MONOTONIC, &sev, &timerid) != 0) {
         int err = errno;                 /* copiar antes de llamar a nada mas */
-        ckpt_log("[libckpt] ERROR: timer_create: errno=%d (%s)\n", err, strerror(err));
+        CKPT_ERROR("timer_create: errno=%d (%s)", err, strerror(err));
         errno = err;
         return -1;
     }
@@ -466,7 +448,7 @@ static int arm_dump_timer(uint64_t ns, pid_t *tid_out){
     if (timer_settime(timerid, 0, &its, NULL) != 0) {
         int err = errno;                 /* antes de timer_delete, que puede pisarlo */
         timer_delete(timerid);
-        ckpt_log("[libckpt] ERROR: timer_settime: errno=%d (%s)\n", err, strerror(err));
+        CKPT_ERROR("timer_settime: errno=%d (%s)", err, strerror(err));
         errno = err;
         return -1;
     }
@@ -483,7 +465,6 @@ static void libckpt_init(void)
      * no child process (shells, nm, make, etc.) inherits LD_PRELOAD and
      * causes a fork bomb by re-loading libckpt.so recursively. */
     unsetenv("LD_PRELOAD");
-    //g_main_tid = pthread_self();   /* record main thread for directed SIGUSR1 */
 
     extern char *program_invocation_short_name;
 
@@ -513,10 +494,10 @@ static void libckpt_init(void)
     sigemptyset(&sa.sa_mask);
     sigaction(SIGUSR1, &sa, NULL);
 
-    fprintf(stderr, "[libckpt] Initialized. Output=%s  AfterNs=%lu  Symbol=%s(call#%d)\n",
+    CKPT_INFO("Initialized. Output=%s  AfterNs=%lu  Symbol=%s(call#%d)",
             g_output_path, (unsigned long)g_after_ns,
             g_sym_name[0] ? g_sym_name : "(none)", g_sym_target_call);
-    fprintf(stderr, "[libckpt] PID=%d  send SIGUSR1 to trigger manually.\n",
+    CKPT_INFO("PID=%d  send SIGUSR1 to trigger manually.",
             (int)getpid());
 
     /* Install symbol hook if requested */
@@ -525,26 +506,14 @@ static void libckpt_init(void)
 
     /* Arm the one-shot POSIX timer if requested */
     if (g_after_ns > 0) {
-        /*pthread_t tid;
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        int rc = pthread_create(&tid, &attr, timer_thread, NULL);
-        if(rc != 0){
-            ckpt_log("[libckpt] ERROR: rc=%d (%s)\n",  rc,strerror(rc));
-            pthread_attr_destroy(&attr);
-            return;
-        }
-        pthread_attr_destroy(&attr);
-        fprintf(stderr, "[libckpt] Timer thread started (%lu ns).\n",
-                (unsigned long)g_after_ns);
-        */
         pid_t tid;
         if (arm_dump_timer(g_after_ns, &tid) != 0) {
             /* arm_dump_timer ya ha logueado que llamada fallo y por que */
+            CKPT_FATAL("CKPT_AFTER_NS=%lu requested but the timer could not be armed, exiting",
+                       (unsigned long)g_after_ns);
             _exit(1);
         }
-        ckpt_log("[libckpt] Timer armed (%lu ns, tid %d).\n",
+        CKPT_INFO("Timer armed (%lu ns, tid %d).",
                  (unsigned long)g_after_ns, (int)tid);
     }
 }

@@ -78,7 +78,7 @@ args = parser.parse_args()
 NT = len(args.ckpts)
 RESTORE = resolve_restore(args.restore)
 if RESTORE == "loader" and args.warmup:
-    raise SystemExit("--warmup solo tiene sentido con --restore direct")
+    raise SystemExit("[rmc] FATAL: --warmup only makes sense with --restore direct")
 # Con loader siempre hay CPU simple + conmutacion; en directo, solo si se
 # pide calentamiento. Si no, la O3 es la unica CPU y arranca ya en el ROI.
 SWITCH = RESTORE == "loader" or args.warmup > 0
@@ -177,14 +177,14 @@ if RESTORE == "loader" and NT > 1:
     loader_args.append(f"--barrier={barrier}:{NT}")
 # Rutas absolutas: cada proceso arranca en el cwd de su checkpoint
 ckpts = [os.path.abspath(ck) for ck in args.ckpts]
-print(f"**** Restauracion: {RESTORE} ****", flush=True)
+print(f"**** Restore: {RESTORE} ****", flush=True)
 procs, exes = [], []
 for i, ck in enumerate(ckpts):
     proc, exe, cwd = make_process(ck, RESTORE, args.loader, args.loader_pie, remaps,
                                   loader_args, pid=100 + i, env=env_list)
     procs.append(proc)
     exes.append(exe)
-    via = "directa" if RESTORE == "direct" else os.path.basename(exe)
+    via = "direct" if RESTORE == "direct" else os.path.basename(exe)
     print(f"  {os.path.basename(ck)} -> {via}  cwd={cwd}", flush=True)
 
 system.workload     = SEWorkload.init_compatible(exes[0])
@@ -203,7 +203,7 @@ m5.instantiate()
 
 # -- Fase 1: carga (loader) o calentamiento (directa) -----------------------
 if RESTORE == "loader":
-    print(f"**** FASE 1: {NT} loader(es) en {args.load_cpu} ****", flush=True)
+    print(f"**** PHASE 1: {NT} loader(s) on {args.load_cpu} ****", flush=True)
     done = 0
     while done < NT:
         ev    = m5.simulate()
@@ -214,34 +214,34 @@ if RESTORE == "loader":
             # hilo avance entre el primer y el ultimo m5_exit es ROI ejecutado en
             # la CPU simple (debe ser despreciable frente a --maxinsts).
             counts = [active.getCurrentInstCount(t) for t in range(NT)]
-            print(f"  [loader {done}/{NT}] listo en tick {m5.curTick()}  insts={counts}",
+            print(f"  [loader {done}/{NT}] ready at tick {m5.curTick()}  insts={counts}",
                   flush=True)
         else:
-            print(f"!!! Evento inesperado durante la carga: '{cause}' @ {m5.curTick()}", flush=True)
+            print(f"[rmc] ERROR: unexpected event while loading: '{cause}' @ {m5.curTick()}", flush=True)
             print(f"Exited @ tick {m5.curTick()} because {cause}")
             raise SystemExit(1)
     load_insts = [active.getCurrentInstCount(t) for t in range(NT)]
-    print(f"**** Carga completa. Instrucciones por hilo: {load_insts} ****", flush=True)
+    print(f"**** Load complete. Instructions per thread: {load_insts} ****", flush=True)
 elif args.warmup:
-    print(f"**** FASE 1: calentamiento de {args.warmup} instrucciones en {args.load_cpu} ****",
+    print(f"**** PHASE 1: warm-up of {args.warmup} instructions on {args.load_cpu} ****",
           flush=True)
     for t in range(NT):
         active.scheduleInstStop(t, args.warmup, f"calentamiento: hilo {t}")
     ev = m5.simulate()
     if not ev.getCause().startswith("calentamiento"):
-        print(f"!!! Evento inesperado durante el calentamiento: '{ev.getCause()}' "
+        print(f"[rmc] ERROR: unexpected event during warm-up: '{ev.getCause()}' "
               f"@ {m5.curTick()}", flush=True)
         print(f"Exited @ tick {m5.curTick()} because {ev.getCause()}")
         raise SystemExit(1)
     warm = [active.getCurrentInstCount(t) for t in range(NT)]
-    print(f"**** Calentamiento completo. Instrucciones por hilo: {warm} ****", flush=True)
+    print(f"**** Warm-up complete. Instructions per thread: {warm} ****", flush=True)
 else:
-    print("**** Checkpoint(s) instalados en initState: 0 ciclos de carga ****", flush=True)
+    print("**** Checkpoint(s) installed in initState: 0 load cycles ****", flush=True)
 
 # -- Cambio de CPU ----------------------------------------------------------
 if SWITCH:
-    print("**** Cambiando a DerivO3CPU"
-          f"{'' if args.no_caches else ' (con caches L1/L2)'} ****", flush=True)
+    print("**** Switching to DerivO3CPU"
+          f"{'' if args.no_caches else ' (with L1/L2 caches)'} ****", flush=True)
     m5.switchCpus(system, [(system.cpu, system.o3)])
 
 m5.stats.reset()
@@ -254,12 +254,12 @@ for t in range(NT):
     system.o3.scheduleInstStop(t, args.maxinsts,
                              f"ROI: hilo {t} alcanzo {args.maxinsts} instrucciones")
 
-print(f"**** FASE 2: ROI en O3, {args.maxinsts} instrucciones por hilo ****", flush=True)
+print(f"**** PHASE 2: ROI on O3, {args.maxinsts} instructions per thread ****", flush=True)
 ev  = m5.simulate()
 roi = [system.o3.getCurrentInstCount(t) for t in range(NT)]
 
-print(f"**** ROI terminado: '{ev.getCause()}' ****", flush=True)
+print(f"**** ROI finished: '{ev.getCause()}' ****", flush=True)
 for t in range(NT):
-    print(f"     hilo {t} ({os.path.basename(args.ckpts[t])}): "
-          f"{roi[t]} instrucciones de ROI", flush=True)
+    print(f"     thread {t} ({os.path.basename(args.ckpts[t])}): "
+          f"{roi[t]} ROI instructions", flush=True)
 print(f"Exited @ tick {m5.curTick()} because {ev.getCause()}")

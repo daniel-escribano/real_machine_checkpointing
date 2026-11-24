@@ -47,6 +47,7 @@
 # Sale con 0 si el checkpoint es valido, 1 si no.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+LOG_COMPONENT=gen
 
 OUT=""; DIR="$PWD"; NS=""; SYM=""; WAIT=0; TIMEOUT=900; STDIN=/dev/null
 while [ $# -gt 0 ]; do
@@ -60,14 +61,14 @@ while [ $# -gt 0 ]; do
         --timeout) TIMEOUT=$2; shift 2 ;;
         --) shift; break ;;
         -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-        *) die "opcion desconocida: $1 (el comando va tras --)" ;;
+        *) die "unknown option: $1 (the command goes after --)" ;;
     esac
 done
-[ -n "$OUT" ] || die "falta -o SALIDA.ckpt"
-[ $# -gt 0 ]  || die "falta el comando (tras --)"
-[ -f "$LIBCKPT" ] || die "no existe $LIBCKPT (ejecuta: make -C $REPO)"
-DIR="$(cd "$DIR" 2>/dev/null && pwd)" || die "no existe el directorio de trabajo"
-STDIN="$(realpath -e "$STDIN" 2>/dev/null)" || die "no existe la entrada estandar indicada con -i"
+[ -n "$OUT" ] || die "missing -o OUTPUT.ckpt"
+[ $# -gt 0 ]  || die "missing the command (after --)"
+[ -f "$LIBCKPT" ] || die "$LIBCKPT not found (run: make -C $REPO)"
+DIR="$(cd "$DIR" 2>/dev/null && pwd)" || die "working directory not found"
+STDIN="$(realpath -e "$STDIN" 2>/dev/null)" || die "stdin file given with -i not found"
 mkdir -p "$(dirname "$OUT")"
 OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
 NAME="$(basename "$OUT" .ckpt)"
@@ -76,8 +77,8 @@ NAME="$(basename "$OUT" .ckpt)"
 NORAND="setarch -R"
 ASLR=off
 if ! setarch -R true 2>/dev/null; then
-    [ "${RMC_ALLOW_ASLR:-0}" = 1 ] || die "setarch -R no funciona en esta maquina (¿Docker?). Genera fuera del contenedor o usa RMC_ALLOW_ASLR=1 sabiendo que el checkpoint no saldra igual que los demas."
-    echo "AVISO: generando con ASLR (RMC_ALLOW_ASLR=1)" >&2
+    [ "${RMC_ALLOW_ASLR:-0}" = 1 ] || die "setarch -R does not work on this machine (Docker?). Generate outside the container, or set RMC_ALLOW_ASLR=1 knowing the checkpoint will not match the others."
+    log_warn "generating with ASLR enabled (RMC_ALLOW_ASLR=1)"
     NORAND=""; ASLR=on
 fi
 
@@ -86,16 +87,16 @@ case "$1" in
     */*) BINPATH="$(cd "$DIR" && realpath -e "$1" 2>/dev/null)" ;;
     *)   BINPATH="$(command -v "$1" 2>/dev/null)" ;;
 esac
-[ -n "$BINPATH" ] && [ -f "$BINPATH" ] || die "no se encuentra el binario $1 (relativo a $DIR)"
+[ -n "$BINPATH" ] && [ -f "$BINPATH" ] || die "binary $1 not found (relative to $DIR)"
 if readelf -lW "$BINPATH" 2>/dev/null | grep -q "program interpreter"; then
     KIND=dynamic
     # Solo la columna de la instruccion: en el texto completo tambien salen
     # nombres de simbolos (gcc_r tiene gen_avx_vzeroupper, vzeroupper_operation...)
     n=$(objdump -d --no-show-raw-insn "$BINPATH" 2>/dev/null | awk -F'\t' 'NF >= 2 {print $2}' \
         | grep -cE '%ymm|%zmm|^(vpbroadcast|vzeroupper|vmovdq|bextr|shlx|sarx|shrx)')
-    [ "${n:-0}" -eq 0 ] || die "$BINPATH contiene $n instrucciones AVX/BMI2 que gem5 SE no implementa (recompila sin AVX, p.ej. specs/config/gem5_noavx.cfg)"
+    [ "${n:-0}" -eq 0 ] || die "$BINPATH contains $n AVX/BMI2 instructions that gem5 SE does not implement (rebuild without AVX, e.g. specs/config/gem5_noavx.cfg)"
 else
-    die "$BINPATH es un binario estatico: LD_PRELOAD no se aplica y no se puede generar el checkpoint. Enlazalo dinamicamente (si llama a ckpt_dump(), enlaza src/dumper.c y src/dumper_asm.S dentro de un PIE)."
+    die "$BINPATH is a static binary: LD_PRELOAD does not apply, so no checkpoint can be taken. Link it dynamically (if it calls ckpt_dump(), link src/dumper.c and src/dumper_asm.S into a PIE)."
 fi
 
 # ---- Ejecucion --------------------------------------------------------------
@@ -112,7 +113,7 @@ if [ -n "$SYM" ]; then
 fi
 
 rm -f "$OUT" "$OUT.tmp" "$OUT.log" "$OUT.stdout" "$OUT.inspect" "$OUT.meta"
-echo "[gen] $NAME: $* (en $DIR, $TRIGGER)"
+log_info "$NAME: $* (in $DIR, $TRIGGER)"
 # exec: el PID de fondo es el propio programa (setarch y env hacen exec)
 ( cd "$DIR" && exec $NORAND env "${ENVV[@]}" "$@" ) < "$STDIN" > "$OUT.stdout" 2> "$OUT.log" &
 PID=$!
@@ -130,19 +131,19 @@ wait "$PID" 2>/dev/null
 rm -f "$OUT.tmp"
 
 fail() {
-    echo "[gen] FALLO $NAME: $*" >&2
+    log_error "$NAME: $*"
     tail -n 15 "$OUT.log" | sed 's/^/        /' >&2
     exit 1
 }
-[ "$timed_out" = 0 ] || fail "sin checkpoint tras ${TIMEOUT}s"
-[ -f "$OUT" ]        || fail "el programa termino sin generar el checkpoint"
-grep -q "Dump complete" "$OUT.log" || fail "el volcado no se completo"
+[ "$timed_out" = 0 ] || fail "no checkpoint after ${TIMEOUT}s"
+[ -f "$OUT" ]        || fail "the program exited without writing the checkpoint"
+grep -q "Dump complete" "$OUT.log" || fail "the dump did not complete"
 
 python3 "$REPO/tools/ckpt_inspect.py" "$OUT" > "$OUT.inspect" 2>&1 \
-    || fail "tools/ckpt_inspect.py no puede leerlo"
+    || fail "tools/ckpt_inspect.py cannot read it"
 if grep -q '!!' "$OUT.inspect"; then
     grep '!!' "$OUT.inspect" >&2
-    fail "checkpoint invalido"
+    fail "invalid checkpoint"
 fi
 LOADER_REC="$(sed -n 's/.*loader recomendado: build\/\([a-z_]*\).*/\1/p' "$OUT.inspect")"
 HEAP_END="$(sed -n 's/^heap_end=\(0x[0-9a-f]*\).*/\1/p' "$OUT.inspect")"
@@ -164,5 +165,5 @@ HEAP_END="$(sed -n 's/^heap_end=\(0x[0-9a-f]*\).*/\1/p' "$OUT.inspect")"
     printf 'RMC_COMMIT=%q\n'   "$(git -C "$REPO" describe --always --dirty 2>/dev/null || echo unknown)"
 } > "$OUT.meta"
 
-echo "[gen] OK $NAME: $(du -h "$OUT" | cut -f1), $KIND, heap_end=$HEAP_END -> $LOADER_REC"
+log_info "OK $NAME: $(du -h "$OUT" | cut -f1), $KIND, heap_end=$HEAP_END -> $LOADER_REC"
 exit 0

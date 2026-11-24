@@ -38,6 +38,7 @@
 #include <asm/prctl.h>
 
 #include "checkpoint.h"
+#define CKPT_LOG_COMPONENT "ckpt"   /* prefix of every CKPT_* message */
 #include "dumper.h"
 
 /* ------------------------------------------------------------------ */
@@ -118,13 +119,13 @@ static int parse_maps(ckpt_region_t *regions, int max_regions,
     static char maps[MAPS_BUF_SZ];
     int mfd = open("/proc/self/maps", O_RDONLY);
     if (mfd < 0) {
-        ckpt_log("[ckpt] ERROR: open /proc/self/maps: %s\n", strerror(errno));
+        CKPT_ERROR("open /proc/self/maps: %s", strerror(errno));
         return -1;
     }
     size_t len = 0;
     for (;;) {
         if (len == sizeof(maps) - 1) {
-            ckpt_log("[ckpt] ERROR: /proc/self/maps larger than %d bytes\n",
+            CKPT_ERROR("/proc/self/maps larger than %d bytes",
                      MAPS_BUF_SZ);
             close(mfd);
             return -1;
@@ -132,7 +133,7 @@ static int parse_maps(ckpt_region_t *regions, int max_regions,
         ssize_t r = read(mfd, maps + len, sizeof(maps) - 1 - len);
         if (r < 0 && errno == EINTR) continue;
         if (r < 0) {
-            ckpt_log("[ckpt] ERROR: read /proc/self/maps: %s\n", strerror(errno));
+            CKPT_ERROR("read /proc/self/maps: %s", strerror(errno));
             close(mfd);
             return -1;
         }
@@ -161,7 +162,7 @@ static int parse_maps(ckpt_region_t *regions, int max_regions,
         if (n >= max_regions) {
             /* Silently dropping a region would produce a checkpoint that
              * restores with memory missing. Refuse instead. */
-            ckpt_log("[ckpt] ERROR: more than %d memory regions\n", max_regions);
+            CKPT_ERROR("more than %d memory regions", max_regions);
             return -1;
         }
 
@@ -253,8 +254,8 @@ static int parse_fds(ckpt_fd_t *fds, int max_fds, int exclude_fd)
             /* readlink() truncates silently: a truncated path would make
              * the loader reopen the wrong file. Keep the fd out of the
              * checkpoint's restorable set instead. */
-            ckpt_log("[ckpt] WARNING: path of fd %d longer than %zu bytes, "
-                     "it will not be restored\n", fd, sizeof(target) - 2);
+            CKPT_WARN("path of fd %d longer than %zu bytes, "
+                      "it will not be restored", fd, sizeof(target) - 2);
             snprintf(target, sizeof(target), "path_too_long_fd_%d", fd);
         } else {
             target[len] = '\0';
@@ -283,7 +284,7 @@ static int parse_fds(ckpt_fd_t *fds, int max_fds, int exclude_fd)
             memcpy(fds[n].path, cwd, (size_t)len + 1);
             n++;
         } else {
-            ckpt_log("[ckpt] WARNING: working directory not recorded\n");
+            CKPT_WARN("working directory not recorded");
         }
     }
     return n;
@@ -320,12 +321,12 @@ static int dump_region_data(int fd, ckpt_region_t *reg, uint64_t *cur_off)
                 /* Page not readable (e.g. guard page) -- zero-fill */
                 static const uint8_t zeros[4096] = {0};
                 if (write_all(fd, zeros, chunk) < 0) {
-                    ckpt_log("[ckpt] ERROR: write: %s\n", strerror(errno));
+                    CKPT_ERROR("write: %s", strerror(errno));
                     return -1;
                 }
                 written += chunk;
             } else {
-                ckpt_log("[ckpt] ERROR: write: %s\n",
+                CKPT_ERROR("write: %s",
                          r < 0 ? strerror(errno) : "0 bytes written");
                 return -1;
             }
@@ -336,7 +337,7 @@ static int dump_region_data(int fd, ckpt_region_t *reg, uint64_t *cur_off)
 
     reg->data_size = (uint64_t)written;
     *cur_off += written;
-    ckpt_log("[ckpt] region %lx-%lx: file_offset=%lu data_size=%lu\n",
+    CKPT_INFO("region %lx-%lx: file_offset=%lu data_size=%lu",
              (unsigned long)reg->start, (unsigned long)reg->end,
              (unsigned long)reg->file_offset, (unsigned long)reg->data_size);
     return 0;
@@ -349,20 +350,20 @@ static int dump_region_data(int fd, ckpt_region_t *reg, uint64_t *cur_off)
 int ckpt_dump_impl(const char *path, ckpt_regs_t *r)
 {
     int local_errno = errno;
-    ckpt_log("[ckpt] Starting dump to: %s\n", path);
+    CKPT_INFO("Starting dump to: %s", path);
 
     /* 1. Capture ROI entry RIP.
      * With the naked ckpt_dump, r->rip ALREADY contains the correct ROI RIP.
      */
     uint64_t roi_rip = r->rip;
-    ckpt_log("[ckpt] ROI RIP (from naked capture): 0x%lx\n", roi_rip);
+    CKPT_INFO("ROI RIP (from naked capture): 0x%lx", roi_rip);
 
     /* 2. Parse /proc/self/maps */
     static ckpt_region_t regions[MAX_REGIONS];
     int num_regions = parse_maps(regions, MAX_REGIONS, 0);
     if (num_regions < 0) return -1;
 
-    ckpt_log("[ckpt] Found %d memory regions\n", num_regions);
+    CKPT_INFO("Found %d memory regions", num_regions);
 
     /* Safely fetch fs_base and gs_base via arch_prctl to avoid illegal instructions on older CPUs */
     syscall(SYS_arch_prctl, ARCH_GET_FS, &r->fs_base);
@@ -374,19 +375,19 @@ int ckpt_dump_impl(const char *path, ckpt_regs_t *r)
      * checkpoint (e.g. if the process is killed mid-dump). */
     static char tmp_path[4096];
     if ((size_t)snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path) >= sizeof(tmp_path)) {
-        ckpt_log("[ckpt] ERROR: output path too long\n");
+        CKPT_ERROR("output path too long");
         return -1;
     }
     int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
-        ckpt_log("[ckpt] ERROR: open %s: %s\n", tmp_path, strerror(errno));
+        CKPT_ERROR("open %s: %s", tmp_path, strerror(errno));
         return -1;
     }
 
     /* Parse open file descriptors */
     static ckpt_fd_t fds[MAX_FDS];
     int num_fds = parse_fds(fds, MAX_FDS, fd);
-    ckpt_log("[ckpt] Found %d open file descriptors\n", num_fds);
+    CKPT_INFO("Found %d open file descriptors", num_fds);
 
     /* 4. Write placeholder header + region descriptors + fd descriptors */
     static ckpt_header_t hdr;
@@ -400,18 +401,18 @@ int ckpt_dump_impl(const char *path, ckpt_regs_t *r)
     hdr.stack_va = r->rsp;
 
     if (write_all(fd, &hdr, sizeof(hdr)) < 0) {
-        ckpt_log("[ckpt] ERROR: write header: %s\n", strerror(errno));
+        CKPT_ERROR("write header: %s", strerror(errno));
         goto fail;
     }
     /* Write region descriptors (placeholders, offsets filled after) */
     if (write_all(fd, regions, num_regions * sizeof(ckpt_region_t)) < 0) {
-        ckpt_log("[ckpt] ERROR: write descriptors: %s\n", strerror(errno));
+        CKPT_ERROR("write descriptors: %s", strerror(errno));
         goto fail;
     }
 
     /* Write FD descriptors */
     if (write_all(fd, fds, num_fds * sizeof(ckpt_fd_t)) < 0) {
-        ckpt_log("[ckpt] ERROR: write fds: %s\n", strerror(errno));
+        CKPT_ERROR("write fds: %s", strerror(errno));
         goto fail;
     }
 
@@ -423,40 +424,40 @@ int ckpt_dump_impl(const char *path, ckpt_regs_t *r)
     uint64_t cur_off = (uint64_t)CKPT_DATA_OFFSET(num_regions, num_fds);
     for (int i = 0; i < num_regions; i++) {
         if (dump_region_data(fd, &regions[i], &cur_off) < 0) {
-            ckpt_log("[ckpt] ERROR: failed to dump region %d (%s)\n",
+            CKPT_ERROR("failed to dump region %d (%s)",
                      i, regions[i].name);
             goto fail;
         }
     }
     if (patch_errno_in_image(fd, regions, num_regions, local_errno) < 0)
-        ckpt_log("[ckpt] WARNING: errno not found in the image, the restored program may see a stale errno\n");
+        CKPT_WARN("errno not found in the image, the restored program may see a stale errno");
 
     /* 6. Patch region descriptors with correct file_offset / data_size.
      * Use pwrite to avoid depending on the fd's current position. */
     ssize_t desc_sz = (ssize_t)((uint64_t)num_regions * sizeof(ckpt_region_t));
     ssize_t pw = pwrite(fd, regions, (size_t)desc_sz, (off_t)sizeof(ckpt_header_t));
-    ckpt_log("[ckpt] pwrite descriptors: returned=%ld expected=%ld\n", (long)pw, (long)desc_sz);
+    CKPT_INFO("pwrite descriptors: returned=%ld expected=%ld", (long)pw, (long)desc_sz);
     if (pw != desc_sz) {
-        ckpt_log("[ckpt] ERROR: pwrite descriptors patch: %s\n", strerror(errno));
+        CKPT_ERROR("pwrite descriptors patch: %s", strerror(errno));
         goto fail;
     }
 
     if (fsync(fd) < 0 && errno != EINVAL) {
-        ckpt_log("[ckpt] ERROR: fsync: %s\n", strerror(errno));
+        CKPT_ERROR("fsync: %s", strerror(errno));
         goto fail;
     }
     if (close(fd) < 0) {
         fd = -1;
-        ckpt_log("[ckpt] ERROR: close: %s\n", strerror(errno));
+        CKPT_ERROR("close: %s", strerror(errno));
         goto fail;
     }
     fd = -1;
     if (rename(tmp_path, path) < 0) {
-        ckpt_log("[ckpt] ERROR: rename %s -> %s: %s\n", tmp_path, path, strerror(errno));
+        CKPT_ERROR("rename %s -> %s: %s", tmp_path, path, strerror(errno));
         goto fail;
     }
 
-    ckpt_log("[ckpt] Dump complete. ROI RIP=0x%lx, RSP=0x%lx\n",
+    CKPT_INFO("Dump complete. ROI RIP=0x%lx, RSP=0x%lx",
              roi_rip, r->rsp);
     errno = local_errno;
     return 0;

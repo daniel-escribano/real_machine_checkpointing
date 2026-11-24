@@ -200,7 +200,7 @@ a +-12); la diferencia esta toda en la L2 y se explica en
 `x86_mixed_2core.py` (`mcf`+`leela` en el nucleo 0, `xz`+`nab` en el 1,
 2 M instrucciones por hilo):
 
-- directa: `4 checkpoints instalados en initState: 0 ciclos de carga` y los
+- directa: `4 checkpoints installed in initState: 0 load cycles` y los
   4 hilos llegan a su tope (2000001-2000004) sin panic.
 - loader: la conmutacion a O3 no aborta (usa el arreglo de `BaseMMU` y el export de
   `suspendContext`) y los 4 hilos llegan a su tope (2000000-2000003) sin

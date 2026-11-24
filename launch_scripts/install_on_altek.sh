@@ -20,35 +20,35 @@ REPO_URL="${REPO_URL:-git@github.com:jefemaestro302/real_machine_checkpointing.g
 DEST="${DEST:-\$HOME/TFM/repositories/real_machine_checkpointing}"
 BRANCH="${1:-master}"
 
-echo "=== Instalando en $REMOTE (rama $BRANCH) ==="
+echo "=== Installing on $REMOTE (branch $BRANCH) ==="
 ssh "$REMOTE" bash -s <<REMOTE_SCRIPT
 set -euo pipefail
 DEST="$DEST"
 if [ -d "\$DEST/.git" ]; then
-    echo "[1/2] Actualizando clon existente en \$DEST"
+    echo "[1/2] Updating the existing clone in \$DEST"
     cd "\$DEST"
     git fetch --all --prune
     git checkout "$BRANCH"
     git reset --hard "origin/$BRANCH"
 else
-    echo "[1/2] Clonando en \$DEST"
+    echo "[1/2] Cloning into \$DEST"
     mkdir -p "\$(dirname "\$DEST")"
     git clone "$REPO_URL" "\$DEST"
     cd "\$DEST"
     git checkout "$BRANCH"
 fi
 
-echo "[2/2] Compilando loaders y libckpt.so"
+echo "[2/2] Building the loaders and libckpt.so"
 make -C "\$DEST" clean >/dev/null
 # Los targets del Makefile son relativos (build/...), no rutas absolutas.
 make -C "\$DEST" build/loader build/loader_pie build/libckpt.so 2>&1 | tail -5
 for f in loader loader_pie libckpt.so; do
-    [ -f "\$DEST/build/\$f" ] || { echo "ERROR: no se genero build/\$f"; exit 1; }
+    [ -f "\$DEST/build/\$f" ] || { echo "[install_on_altek] FATAL: build/\$f was not produced" >&2; exit 1; }
 done
 ls -la "\$DEST/build/"
 REMOTE_SCRIPT
 
 echo ""
-echo "=== Instalado. Para lanzar experimentos: ==="
+echo "=== Installed. To launch experiments: ==="
 echo "  ssh $REMOTE"
 echo "  \$HOME/TFM/repositories/real_machine_checkpointing/launch_scripts/run_mixed.sh <tag> <insts> timing --pmu <ckpt...>"

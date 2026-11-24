@@ -28,12 +28,12 @@ MAXINSTS=${1:?falta maxinsts}; shift
 LOADCPU=${1:?falta load-cpu (timing|atomic)}; shift
 PMU=""
 if [ "${1:-}" = "--pmu" ]; then PMU="--pmu"; shift; fi
-[ $# -eq 0 ] && die "falta al menos un checkpoint"
+[ $# -eq 0 ] && die "at least one checkpoint is required"
 # Rutas absolutas: gem5 se lanza con el CWD en el outdir (ver arriba), asi que
 # un checkpoint relativo dejaria de encontrarse.
 CKPTS=""
 for c in "$@"; do
-    [ -f "$c" ] || die "no existe el checkpoint $c"
+    [ -f "$c" ] || die "checkpoint $c not found"
     CKPTS="$CKPTS $(realpath "$c")"
 done
 CKPTS="${CKPTS# }"
@@ -47,10 +47,10 @@ rm -f "$OUTDIR"/CPU_*.csv
 echo "=================================================="
 echo " tag        : $TAG"
 echo " checkpoints: $CKPTS"
-echo " restaura   : ${RMC_RESTORE:-auto}   carga/calentamiento: $LOADCPU  (${RMC_WARMUP:-0} insts)"
+echo " restore    : ${RMC_RESTORE:-auto}   load/warm-up: $LOADCPU  (${RMC_WARMUP:-0} insts)"
 echo " ROI        : DerivO3CPU + caches L1/L2  $PMU"
-echo " maxinsts   : $MAXINSTS (por hilo)"
-echo " remapeos   : ${REMAPS:-(ninguno)}"
+echo " maxinsts   : $MAXINSTS (per thread)"
+echo " remaps     : ${REMAPS:-(none)}"
 echo " outdir     : $OUTDIR"
 echo "=================================================="
 
@@ -67,6 +67,6 @@ RC=$?
 echo ""
 echo "=== ROI (DerivO3CPU) ==="
 "$REPO/launch_scripts/parse_roi_stats.py" "$OUTDIR" 2>/dev/null
-echo "--- CSVs de PMU ---"
-ls -la "$OUTDIR"/CPU_*.csv 2>/dev/null || echo "(ninguno)"
+echo "--- PMU CSVs ---"
+ls -la "$OUTDIR"/CPU_*.csv 2>/dev/null || echo "(none)"
 exit $RC

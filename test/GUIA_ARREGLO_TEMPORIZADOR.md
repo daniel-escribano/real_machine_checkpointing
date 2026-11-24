@@ -2,7 +2,7 @@
 
 **Estado: cerrada el 2026-11-18** (etapas 0-3 hechas; las 4 y 5 quedan fuera de esta guía).
 
-Issue: [`issues/2026-11-12_cpython_ckpt_after_ns_pthread_create_stub.md`](../issues/2026-11-12_cpython_ckpt_after_ns_pthread_create_stub.md)
+Issue: `issues/2026-11-12_cpython_ckpt_after_ns_pthread_create_stub.md` (notas locales, fuera de git)
 
 El código lo escribes tú. Esta guía da los ficheros, el pseudocódigo, las
 pistas y un hito comprobable por etapa. Después de cada etapa ejecuta `make`
@@ -37,10 +37,10 @@ símbolo, no cambia nada. Efectos secundarios:
 1. **`test_signal_malloc` pierde cobertura sin avisar.** Sin el hilo del
    temporizador, glibc se salta el lock de malloc y el test deja de comprobar el
    deadlock dentro de malloc. Es un problema aparte, con su propio issue
-   ([`test_signal_malloc_monohilo_sin_lock`](../issues/2026-11-16_test_signal_malloc_monohilo_sin_lock.md)):
+   (`issues/2026-11-16_test_signal_malloc_monohilo_sin_lock.md`, local):
    no forma parte de esta guía. La sección "signal inside malloc" del runner
    también falla a veces por otra causa (ventana aleatoria,
-   [`runner_malloc_ventana_aleatoria_intermitente`](../issues/2026-11-16_runner_malloc_ventana_aleatoria_intermitente.md)).
+   `issues/2026-11-16_runner_malloc_ventana_aleatoria_intermitente.md`, local).
 2. **Los checkpoints nuevos hechos con `-t` no son iguales que los antiguos.**
    - Antes, el `pthread_create` sacaba a glibc del modo de un solo hilo
      (`__libc_single_threaded` pasa a falso y no vuelve atrás): malloc toma
@@ -88,7 +88,7 @@ main:
 - **En el runner:** añade una sección que genere el checkpoint con
   `gen -t 1000000000`, lo restaure con `loader_pie` y espere `STUB DONE`.
 
-**Hito:** el test nuevo da **FAIL** con "terminó sin generar el checkpoint"
+**Hito:** el test nuevo da **FAIL** con "the program exited without writing the checkpoint"
 (el síntoma del issue) y `strace -f -e trace=clone3` no muestra ningún
 `clone3`.
 
@@ -143,7 +143,7 @@ Pistas:
 - Un `it_value` a cero **desarma** el temporizador en vez de dispararlo ya. El
   `if (g_after_ns > 0)` te protege; no lo quites.
 - Terminar en el constructor es decisión tuya. Recomendado: `gen_ckpt.sh` ya
-  convierte un código de salida distinto de cero en `FALLO` al momento, en vez
+  convierte un código de salida distinto de cero en `[gen] ERROR` al momento, en vez
   de esperar a que acabe el programa.
 - Con glibc < 2.34 (comprueba altek con `ldd --version`) `timer_create` está en
   librt y hay que añadir `-lrt` al enlazado de `libckpt.so` (línea 80 del

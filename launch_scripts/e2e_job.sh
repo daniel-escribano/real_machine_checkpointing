@@ -69,11 +69,11 @@ run_test() {   # run_test nombre modo ckpts maxinsts expect min failre tmo
             need_exits=${#cks[@]}
             ;;
         genfail)
-            printf 'FAIL  %s (0s): no se genero el checkpoint en el PC: %s\n' "$name" "$expect" > "$d/result"
+            printf 'FAIL  %s (0s): the checkpoint was not generated on the PC: %s\n' "$name" "$expect" > "$d/result"
             return
             ;;
         *)
-            printf 'FAIL  %s (0s): modo desconocido %s\n' "$name" "$mode" > "$d/result"
+            printf 'FAIL  %s (0s): unknown mode %s\n' "$name" "$mode" > "$d/result"
             return
             ;;
     esac
@@ -88,31 +88,31 @@ run_test() {   # run_test nombre modo ckpts maxinsts expect min failre tmo
     if [ "$rc" -eq 124 ]; then
         reason="timeout (${tmo}s)"
     else
-        if grep -qE "instalados? en initState" "$log"; then
+        if grep -qE "installed in initState" "$log"; then
             exits=$need_exits           # restauracion directa: no hay loader
         elif [ "$mode" = st ]; then
-            grep -q "Loader terminado: 'm5_exit instruction encountered'" "$log" && exits=1 || exits=0
+            grep -q "Loader finished: 'm5_exit instruction encountered'" "$log" && exits=1 || exits=0
         else
-            exits=$(grep -c "\] listo en tick" "$log")
+            exits=$(grep -c "\] ready at tick" "$log")
         fi
         bad=$(grep -m1 -E "$GENERIC_FAIL" "$log")
         [ -z "$bad" ] && [ -n "$failre" ] && bad=$(grep -m1 -E "$failre" "$log")
         got=$(grep -cE "$expect" "$log")
         if [ "$exits" -lt "$need_exits" ]; then
-            reason="el loader no llego al ROI ($exits/$need_exits m5_exit)"
-            loaderr=$(grep -m1 -E "\[loader\] (FATAL|WARNING)" "$log")
+            reason="the loader did not reach the ROI ($exits/$need_exits m5_exit)"
+            loaderr=$(grep -m1 -E "\[loader\] (FATAL|WARN)" "$log")
             [ -n "$loaderr" ] && reason="$reason: $loaderr"
         elif [ -n "$bad" ]; then
-            reason="error en la salida: $bad"
+            reason="error in the output: $bad"
         elif [ "$rc" -ne 0 ]; then
-            reason="gem5 termino con codigo $rc"
+            reason="gem5 exited with code $rc"
         elif [ "$got" -lt "$min" ]; then
-            reason="'$expect' aparece $got veces (minimo $min)"
+            reason="'$expect' appears $got times (minimum $min)"
         fi
     fi
 
     local roi
-    roi=$(grep -oE "Instrucciones de ROI ejecutadas: [0-9]+|hilo [0-9]+ \([^)]*\): [0-9]+ instrucciones de ROI" "$log" | tr '\n' ' ')
+    roi=$(grep -oE "ROI instructions executed: [0-9]+|thread [0-9]+ \([^)]*\): [0-9]+ ROI instructions" "$log" | tr '\n' ' ')
     if [ -z "$reason" ]; then
         printf 'PASS  %s (%ss) %s\n' "$name" "$secs" "$roi" > "$d/result"
     else
@@ -128,10 +128,10 @@ run_test() {   # run_test nombre modo ckpts maxinsts expect min failre tmo
 summarize() {
     local sum="$RES/summary.txt" pass=0 fail=0 name rest
     {
-        echo "rmc e2e: job ${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local}} en $(hostname) $(date -Is)"
+        echo "rmc e2e: job ${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local}} on $(hostname) $(date -Is)"
         echo "gem5: $GEM5_BIN"
-        echo "remapeos: ${REMAPS:-(ninguno)}"
-        echo "restauracion: ${RESTORE:-auto}"
+        echo "remaps: ${REMAPS:-(none)}"
+        echo "restore: ${RESTORE:-auto}"
         echo ""
         while IFS=$'\t' read -r name rest; do
             [ -z "${name:-}" ] && continue
@@ -140,7 +140,7 @@ summarize() {
                 cat "$RES/$name/result"
                 if head -1 "$RES/$name/result" | grep -q '^PASS'; then pass=$((pass + 1)); else fail=$((fail + 1)); fi
             else
-                echo "FAIL  $name: sin resultado (la tarea SLURM no termino: cancelada, sin memoria o fuera de tiempo; ver results/slurm-*_N.out)"
+                echo "FAIL  $name: no result (the SLURM task did not finish: cancelled, out of memory or out of time; see results/slurm-*_N.out)"
                 fail=$((fail + 1))
             fi
         done < "$RUN/tests.tsv"
@@ -158,9 +158,9 @@ fi
 
 if [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
     line=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$RUN/tests.tsv")
-    [ -n "$line" ] || { echo "tests.tsv no tiene la linea $SLURM_ARRAY_TASK_ID" >&2; exit 1; }
+    [ -n "$line" ] || { echo "[e2e_job] FATAL: tests.tsv has no line $SLURM_ARRAY_TASK_ID" >&2; exit 1; }
     IFS=$'\t' read -r name mode ckpts maxinsts expect min failre tmo <<< "$line"
-    echo "prueba $SLURM_ARRAY_TASK_ID: $name en $(hostname)"
+    echo "test $SLURM_ARRAY_TASK_ID: $name on $(hostname)"
     run_test "$name" "$mode" "$ckpts" "$maxinsts" "$expect" "$min" "$failre" "$tmo"
     cat "$RES/$name/result"
     head -1 "$RES/$name/result" | grep -q '^PASS'

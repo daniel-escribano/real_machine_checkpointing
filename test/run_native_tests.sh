@@ -79,14 +79,14 @@ gen -t 300000000 -o v.ckpt -- ./test_vdso || ko "vdso: no checkpoint"
 out=$(restore loader_pie v.ckpt)
 [[ "$out" == *"CLOCK OK"* ]] && ok "vdso clock" || ko "vdso clock: '$(echo "$out" | tail -1)'"
 
-echo "=== pthread_create falla (timer POSIX, sin hilo temporizador) ==="
+echo "=== pthread_create fails (POSIX timer, no timer thread) ==="
 # test_pthread_stub redefine pthread_create para que devuelva siempre EAGAIN
 # (se exporta con -rdynamic). Si libckpt armara el temporizador con un hilo, no
 # se crearia y no habria .ckpt. Con timer_create no usa pthread_create, asi que
 # el checkpoint si debe generarse y restaurarse.
 if gen -t 1000000000 -o pthread.ckpt -- ./test_pthread_stub; then
     out=$(restore loader_pie pthread.ckpt)
-    [[ "$out" == *"STUB DONE"* ]] && ok "timer sin pthread_create" || ko "timer sin pthread_create: '$(echo "$out" | tail -1)'"
+    [[ "$out" == *"STUB DONE"* ]] && ok "timer without pthread_create" || ko "timer without pthread_create: '$(echo "$out" | tail -1)'"
 else
     ko "timer sin pthread_create: no checkpoint (no se armo el temporizador?)"
 fi

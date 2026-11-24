@@ -231,12 +231,12 @@ e2e y de cada prueba: [`docs/VERIFICACION_GEM5.md`](docs/VERIFICACION_GEM5.md).
 
 | Ejecución | Esperado | Referencia |
 |---|---|---|
-| `--restore direct --spec all` | `RESULTADO: EXITO`, 7 pruebas + 23 SPEC = **30/30** | nuevo |
+| `--restore direct --spec all` | `RESULT: PASS`, 7 pruebas + 23 SPEC = **30/30** | nuevo |
 | `--restore loader --spec all` | **30/30**, igual que el job 151440 del 29-09-2026 | regresión del modo loader con el gem5 unificado |
 
 En directo, cada `gem5.log` tiene que mostrar
 `RMC: ... regions restored (...)`, `process N restored at the ROI` y
-`Checkpoint instalado en initState` o `instalados en initState`, y ningún
+`Checkpoint installed in initState` o `installed in initState`, y ningún
 `[loader]`.
 
 **Comparación entre modos** (para el informe, no bloquea el merge):
