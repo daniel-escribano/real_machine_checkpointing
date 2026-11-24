@@ -13,9 +13,10 @@
 #   - LD_BIND_NOW=1: todos los simbolos se resuelven al arrancar, asi el
 #     resolvedor perezoso de ld.so (que salva registros con xsave/xsavec
 #     segun la CPU) nunca se ejecuta dentro del ROI.
-#   - libckpt.so por LD_PRELOAD. Los binarios estaticos la ignoran: llaman
-#     ellos a ckpt_dump() (build/libckpt_static.o, src/dumper.c).
-#   - Binario dinamico: se comprueba que no contiene AVX/BMI2.
+#   - libckpt.so por LD_PRELOAD. Los binarios estaticos se rechazan (la
+#     ignorarian); un PIE que llame a ckpt_dump() enlaza src/dumper.c y
+#     src/dumper_asm.S.
+#   - Se comprueba que el binario no contiene AVX/BMI2.
 #   - Se espera a que el volcado este COMPLETO (el dumper escribe <out>.tmp
 #     y lo renombra al terminar) y se valida con tools/ckpt_inspect.py.
 #
@@ -94,10 +95,7 @@ if readelf -lW "$BINPATH" 2>/dev/null | grep -q "program interpreter"; then
         | grep -cE '%ymm|%zmm|^(vpbroadcast|vzeroupper|vmovdq|bextr|shlx|sarx|shrx)')
     [ "${n:-0}" -eq 0 ] || die "$BINPATH contiene $n instrucciones AVX/BMI2 que gem5 SE no implementa (recompila sin AVX, p.ej. specs/config/gem5_noavx.cfg)"
 else
-    # En un estatico la glibc trae variantes AVX que solo se eligen en tiempo
-    # de ejecucion (IFUNC); las descartan los tunables. No se puede
-    # comprobar con objdump.
-    KIND=static
+    die "$BINPATH es un binario estatico: LD_PRELOAD no se aplica y no se puede generar el checkpoint. Enlazalo dinamicamente (si llama a ckpt_dump(), enlaza src/dumper.c y src/dumper_asm.S dentro de un PIE)."
 fi
 
 # ---- Ejecucion --------------------------------------------------------------

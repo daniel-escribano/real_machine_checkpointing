@@ -67,3 +67,7 @@ __pycache__/
 
 # Ejecuciones de launch_scripts/e2e_altek.sh
 /e2e_runs/
+
+# Notas de trabajo personales (issues y dudas de aprendizaje): solo en local
+/issues/
+/dudas/

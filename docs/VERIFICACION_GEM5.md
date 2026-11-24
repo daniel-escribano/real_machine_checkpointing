@@ -55,13 +55,12 @@ restaurado por gem5 da la misma salida:
 
 | Prueba | Checkpoint | Pasa si | Bugs que cubre |
 |---|---|---|---|
-| `target_app` | estatico no PIE, `ckpt_dump()` | mismo `checksum=0x...` que en nativo | 1, 3, 5, 7, 8 |
-| `static_malloc` | estatico no PIE, heap por debajo del loader | `STATIC MALLOC OK`: el heap crece y se recorta tras restaurar | 4 (reduccion del break desde el trampolin) |
-| `fd` | estatico, fichero de entrada movido de sitio | `Restored from dump!` y lectura de `67890` por el remapeo | 5 (rax=1), 9 |
+| `target_app` | PIE, `ckpt_dump()` | mismo `checksum=0x...` que en nativo | 1, 3, 5, 7, 8 |
+| `fd` | PIE, fichero de entrada movido de sitio | `Restored from dump!` y lectura de `67890` por el remapeo | 5 (rax=1), 9 |
 | `redzone` | PIE, volcado por senal en una funcion hoja | >= 2 `REDZONE round N ok` y ningun `REDZONE CORRUPT` | 1 |
 | `signal_malloc` | PIE, volcado por senal dentro de malloc | >= 2 `MALLOC chunk N ok` sin abortos de glibc | 2, 4 (ampliacion del break, `loader_pie`) |
 | `vdso` | PIE | >= 2 `CLOCK round N ok` y ningun `CLOCK STUCK` | 11 |
-| `smt2` | `static_malloc` + `signal_malloc` en SMT-2 (O3) | loader: `SMT barrier passed` en los dos procesos, cada uno con su loader; directa: los dos procesos instalados (`-> directa`) y el ROI en O3 sin errores | 4, 10 |
+| `smt2` | `redzone` + `signal_malloc` en SMT-2 (O3) | loader: `SMT barrier passed` en los dos procesos, cada uno con su loader; directa: los dos procesos instalados (`-> directa`) y el ROI en O3 sin errores | 4, 10 |
 | `spec_<b>` | cada benchmark rate preparado (`--spec all`), comando de su `speccmds.cmd` | llega a `--spec-insts` instrucciones de ROI | todo el flujo, cwd y remapeo de SPEC |
 
 Las pruebas que no terminan solas (`redzone`, `signal_malloc`, `vdso`) se
@@ -107,9 +106,11 @@ grep -E "brk" $W/dbg/sys.trace | head
   el `heap_end` del checkpoint; los `brk` del ROI crecen desde ese valor.
   Sin el arreglo devolvian el break del loader y glibc abortaba en el primer
   recorte del heap (`double free or corruption (out)`).
-- No PIE (`test/test_static_malloc.c`, `loader`): un `brk(heap_end)` emitido
-  desde el trampolin justo antes del `m5_exit`; sin el arreglo gem5 trataba el
-  crecimiento como una reduccion y el ROI fallaba al tocar el heap nuevo.
+- No PIE (`loader`): un `brk(heap_end)` emitido desde el trampolin justo antes
+  del `m5_exit`; sin el arreglo gem5 trataba el crecimiento como una reduccion
+  y el ROI fallaba al tocar el heap nuevo. Desde 2026-11-19 ya no hay ninguna
+  prueba no PIE (`test_static_malloc` se retiro con el modo estatico): este caso
+  del loader queda sin cobertura.
 - Si el loader imprime `target heap far above/below the loader break`, se esta
   usando el loader equivocado para ese checkpoint.
 

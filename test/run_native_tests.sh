@@ -8,13 +8,12 @@
 # path used for SPEC and for the gem5 end-to-end test (launch_scripts/e2e_altek.sh).
 #
 # Each test targets a bug that used to break the flow:
-#   target_app  static non-PIE app with ckpt_dump(): fpregs_size/rax restored
+#   target_app  PIE app with ckpt_dump(): fpregs_size/rax restored
 #   test_fd     FD restore, remapping OLD=NEW, sinkholed writes
 #   redzone     loader must not write below the restored %rsp (red zone)
 #   malloc      dump from a signal that lands inside malloc (no deadlock),
 #               and restored malloc keeps working (program break moved)
 #   vdso        clock_gettime/gettimeofday keep working after restore
-#   static      static non-PIE program that grows/trims its heap after restore
 #
 # What these CANNOT check (gem5-only behaviour) is covered by
 # launch_scripts/e2e_altek.sh and docs/VERIFICACION_GEM5.md.
@@ -33,6 +32,9 @@ gcc $CFL -fPIE -pie -o test_redzone       "$HERE/test_redzone.c"
 gcc $CFL -fPIE -pie -o test_signal_malloc "$HERE/test_signal_malloc.c"
 gcc -O1 -mno-avx -fPIE -pie -o test_vdso  "$HERE/test_vdso.c"
 gcc -O1 -mno-avx -fPIE -pie -rdynamic -o test_pthread_stub "$HERE/test_pthread_stub.c"
+# target_app y test_fd llaman a ckpt_dump() (src/dumper.c + dumper_asm.S enlazados dentro del PIE)
+gcc $CFL -fPIE -pie -fno-stack-protector -fno-builtin -o target_app \
+    "$HERE/target_app.c" "$REPO/src/dumper.c" "$REPO/src/dumper_asm.S"
 
 pass=0; fail=0
 ok()  { echo "  PASS  $*"; pass=$((pass+1)); }
@@ -44,11 +46,11 @@ restore() {    # restore <loader> <ckpt> [args]: program stdout
     timeout 60 setarch -R "$REPO/build/$ld" "$ck" --native "$@" 2> "$ck.restore.log"
 }
 
-echo "=== target_app (static, ckpt_dump) ==="
-gen -w -o t.ckpt -- "$REPO/build/target_app" "$WORK/t.ckpt"
+echo "=== target_app (PIE, ckpt_dump) ==="
+gen -w -o t.ckpt -- ./target_app "$WORK/t.ckpt"
 ref=$(grep -o 'checksum=0x[0-9a-f]*' t.ckpt.log | tail -1)
 grep -q "fpregs_size = 512" t.ckpt.inspect && ok "fpregs_size saved" || ko "fpregs_size not 512"
-restore loader t.ckpt > /dev/null
+restore loader_pie t.ckpt > /dev/null
 got=$(grep -o 'checksum=0x[0-9a-f]*' t.ckpt.restore.log)
 [ -n "$ref" ] && [ "$ref" = "$got" ] && ok "restored checksum matches ($ref)" || ko "checksum '$got' != '$ref'"
 
@@ -89,25 +91,8 @@ else
     ko "timer sin pthread_create: no checkpoint (no se armo el temporizador?)"
 fi
 
-echo "=== static non-PIE malloc after restore ==="
-# Its heap lies below the loader's break. Linux only lets the loader move the
-# break down with prctl(PR_SET_MM), which needs CAP_SYS_RESOURCE (gem5 does it
-# with brk(), see docs/VERIFICACION_GEM5.md). Without the capability the same
-# program is linked above the loader, which exercises the brk-grow path.
-SFLAGS="-O2 -static -no-pie -fno-stack-protector"
-if [ $(( 0x$(awk '/CapEff/{print $2}' /proc/self/status) >> 24 & 1 )) -eq 1 ]; then
-    extra=""; what="heap below the loader (prctl)"
-else
-    extra="-Wl,-Ttext-segment=0x40000000"; what="heap above the loader (no CAP_SYS_RESOURCE)"
-fi
-gcc $SFLAGS $extra -o test_static_malloc "$HERE/test_static_malloc.c" \
-    "$REPO/src/dumper.c" "$REPO/src/dumper_asm.S"
-gen -w -o sm.ckpt -- ./test_static_malloc "$WORK/sm.ckpt"
-out=$(restore loader sm.ckpt)
-[ "$out" = "STATIC MALLOC OK" ] && ok "static malloc, $what" || ko "static malloc, $what: '$out'"
-
 echo "=== native loader must not execute m5_exit ==="
-restore loader t.ckpt > /dev/null; rc=$?
+restore loader_pie t.ckpt > /dev/null; rc=$?
 [ "$rc" = 0 ] && ok "--native skips m5_exit" || ko "loader --native exit code $rc"
 
 echo ""

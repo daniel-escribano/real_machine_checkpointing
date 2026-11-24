@@ -9,9 +9,9 @@
  * On FIRST run: does the init, dumps checkpoint at ROI entry, then runs ROI.
  * On RESTORED run (via loader): jumps directly to ROI, skipping init.
  *
- * Compilation:
- *   gcc -O2 -static -no-pie -fno-stack-protector \
- *       -o target_app target_app.c dumper.c
+ * Compilation (PIE, dynamic; see test/run_native_tests.sh):
+ *   gcc -O2 -fPIE -pie -fno-stack-protector -fno-builtin \
+ *       -o target_app test/target_app.c src/dumper.c src/dumper_asm.S
  */
 
 #define _GNU_SOURCE
@@ -22,7 +22,7 @@
 #include <unistd.h>
 #include <time.h>
 
-#include "dumper.h"
+#include "../src/dumper.h"
 
 /* ------------------------------------------------------------------ */
 /*  Simulated workload data structures                                  */

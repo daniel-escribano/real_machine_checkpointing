@@ -26,7 +26,7 @@ Descartado:
   hilos, podría capturar los registros de un hilo que no es el principal.
 - `setitimer`: usa SIGALRM, que va dirigida al proceso y choca con `alarm()`.
 - `SIGEV_THREAD`: glibc crea un hilo auxiliar.
-- `dlsym(RTLD_NEXT)`: no funciona en `STATIC_BUILD`.
+- `dlsym(RTLD_NEXT)`: no funcionaba en `STATIC_BUILD` (modo estático retirado el 2026-11-24).
 - `clone` a mano: el hilo no tiene TLS y no puede usar libc con seguridad.
 
 ## ¿Rompe algo de lo que ya existe?

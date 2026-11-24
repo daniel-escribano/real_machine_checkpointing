@@ -17,13 +17,12 @@
 #        2 = error de preparacion (compilacion, generacion, ssh, slurm)
 #
 # Pruebas (cada una restaura en gem5 y comprueba su salida, ver e2e_job.sh):
-#   target_app     estatico no PIE, ckpt_dump(); checksum igual al nativo
-#   static_malloc  estatico no PIE que hace crecer/recortar el heap (brk)
+#   target_app     PIE, ckpt_dump(); checksum igual al nativo
 #   fd             FDs y remapeo de rutas (fichero movido de sitio)
 #   redzone        volcado por senal en una funcion hoja (red zone)
 #   signal_malloc  PIE, volcado por senal dentro de malloc; malloc tras restaurar
 #   vdso           el reloj avanza tras restaurar (vDSO -> syscalls)
-#   smt2           dos checkpoints (no PIE + PIE) en SMT-2 con O3 (y barrera con loader)
+#   smt2           dos checkpoints PIE (redzone + signal_malloc) en SMT-2 con O3 (y barrera con loader)
 #   spec_<nombre>  (--spec) el benchmark llega a --spec-insts de ROI
 #
 # Opciones:
@@ -243,18 +242,15 @@ if [ "$RUN_TESTS" = 1 ]; then
     build $CFL -fPIE -pie -o "$WORK/test_redzone"       "$REPO/test/test_redzone.c"
     build $CFL -fPIE -pie -o "$WORK/test_signal_malloc" "$REPO/test/test_signal_malloc.c"
     build -O1 -mno-avx -fPIE -pie -o "$WORK/test_vdso"  "$REPO/test/test_vdso.c"
-    build $CFL -static -no-pie -fno-stack-protector -o "$WORK/test_static_malloc" \
-        "$REPO/test/test_static_malloc.c" "$REPO/src/dumper.c" "$REPO/src/dumper_asm.S"
-    build $CFL -static -no-pie -fno-stack-protector -fno-builtin -o "$WORK/test_fd" \
+    build $CFL -fPIE -pie -fno-stack-protector -fno-builtin -o "$WORK/target_app" \
+        "$REPO/test/target_app.c" "$REPO/src/dumper.c" "$REPO/src/dumper_asm.S"
+    build $CFL -fPIE -pie -fno-stack-protector -fno-builtin -o "$WORK/test_fd" \
         "$REPO/test/test_fd.c" "$REPO/src/dumper.c" "$REPO/src/dumper_asm.S"
 
-    "$GEN" -w -C "$WORK" -o "$CK/target_app.ckpt" -- "$REPO/build/target_app" "$CK/target_app.ckpt" \
+    "$GEN" -w -C "$WORK" -o "$CK/target_app.ckpt" -- ./target_app "$CK/target_app.ckpt" \
         || infra_fail "generacion de target_app"
     CHK=$(grep -o 'checksum=0x[0-9a-f]*' "$CK/target_app.ckpt.log" | tail -1)
     [ -n "$CHK" ] || infra_fail "target_app no imprimio su checksum nativo"
-
-    "$GEN" -w -C "$WORK" -o "$CK/test_static_malloc.ckpt" -- ./test_static_malloc "$CK/test_static_malloc.ckpt" \
-        || infra_fail "generacion de test_static_malloc"
 
     mkdir -p "$WORK/fd"
     printf 1234567890 > "$WORK/fd/input1.txt"
@@ -269,13 +265,12 @@ if [ "$RUN_TESTS" = 1 ]; then
     "$GEN" -C "$WORK" -t 300000000 -o "$CK/test_vdso.ckpt"          -- ./test_vdso          || infra_fail "generacion de test_vdso"
 
     add_test target_app    st  ckpt/target_app.ckpt         50000000   "$CHK"                           1 ""                 1800
-    add_test static_malloc st  ckpt/test_static_malloc.ckpt 2000000000 "STATIC MALLOC OK"               1 ""                 3600
     add_test fd            st  ckpt/test_fd.ckpt            50000000   "Restored from dump!|read '67890'" 2 "Dump FAILED"    1800
     add_test redzone       st  ckpt/test_redzone.ckpt       150000000  "REDZONE round [0-9]+ ok"        2 "REDZONE CORRUPT"  3600
     add_test signal_malloc st  ckpt/test_signal_malloc.ckpt 150000000  "MALLOC chunk [0-9]+ ok"         2 ""                 3600
     add_test vdso          st  ckpt/test_vdso.ckpt          150000000  "CLOCK round [0-9]+ ok"          2 "CLOCK STUCK"      3600
     # Barrera en cada loader, o en restauracion directa cada proceso instalado sin loader
-    add_test smt2          smt ckpt/test_static_malloc.ckpt,ckpt/test_signal_malloc.ckpt 200000 "SMT barrier passed|-> directa " 2 "" 3600
+    add_test smt2          smt ckpt/test_redzone.ckpt,ckpt/test_signal_malloc.ckpt 200000 "SMT barrier passed|-> directa " 2 "" 3600
 fi
 REMAPS+=("$WORK=$REMOTE_RUN/work")
 

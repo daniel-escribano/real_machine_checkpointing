@@ -125,6 +125,12 @@ de la forma normal de gem5.
 
 ## Validacion
 
+> Nota (2026-11-19): los resultados de esta seccion son de septiembre, cuando
+> `target_app`, `static_malloc` y `fd` eran binarios estaticos no PIE. Desde
+> entonces el modo estatico se retiro: `target_app` y `fd` son PIE (restaurados
+> con `loader_pie`), `static_malloc` se elimino y `smt2` usa `redzone` +
+> `signal_malloc`. Hay que repetir la e2e en altek con esa version.
+
 En este contenedor (4 nucleos), con el `gem5.opt` del GAP compilado con el
 parche y la e2e real (`e2e_altek.sh` con `RMC_REMOTE=local` y un SLURM
 simulado), los mismos checkpoints en ambos modos:

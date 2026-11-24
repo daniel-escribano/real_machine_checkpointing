@@ -74,7 +74,7 @@ la memoria restaurada y la aplicación ejecuta basura.
 ### 1. Compilar
 
 ```bash
-make                     # build/loader, build/loader_pie, build/libckpt.so, build/libckpt_static.o
+make                     # build/loader, build/loader_pie, build/libckpt.so
 test/run_native_tests.sh # pruebas del flujo en la máquina real, sin gem5
 ```
 
@@ -87,7 +87,7 @@ condiciones:
 ```bash
 launch_scripts/gen_ckpt.sh -t 10000000 -o dump.ckpt -- ./mi_benchmark args...
 launch_scripts/gen_ckpt.sh -s mi_funcion_roi:3 -o dump.ckpt -C run_dir -- ./app   # 3ª llamada
-launch_scripts/gen_ckpt.sh -w -o dump.ckpt -- ./app_estatica dump.ckpt           # ckpt_dump() propio
+launch_scripts/gen_ckpt.sh -w -o dump.ckpt -- ./app dump.ckpt                    # la app llama a ckpt_dump()
 ```
 
 Fija ASLR desactivado (`setarch -R` envolviendo a `env`), `GLIBC_TUNABLES` sin
@@ -108,7 +108,8 @@ Por debajo usa las variables de `libckpt.so`:
 
 Sin ninguna de ellas, espera un `SIGUSR1`.
 
-Desde código (binarios estáticos, `build/libckpt_static.o`): `ckpt_dump(path)`
+Desde código (un PIE enlazado con `src/dumper.c` y `src/dumper_asm.S`, como
+`test/target_app.c`; `libckpt.so` también exporta `ckpt_dump`): `ckpt_dump(path)`
 devuelve 0 en la ejecución original, -1 si falla y 1 cuando la ejecución se
 reanuda desde el checkpoint restaurado.
 

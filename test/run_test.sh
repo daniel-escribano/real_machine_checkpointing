@@ -13,13 +13,13 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$HERE")"
 
-make -C "$REPO" build/loader build/libckpt.so >/dev/null
+make -C "$REPO" build/loader_pie build/libckpt.so >/dev/null
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
 
 echo "=== Building test program ==="
-gcc -O2 -g -Wall -fno-stack-protector -fno-builtin -static -no-pie \
+gcc -O2 -g -Wall -fno-stack-protector -fno-builtin -fPIE -pie \
     -o test_fd "$HERE/test_fd.c" "$REPO/src/dumper.c" "$REPO/src/dumper_asm.S"
 
 printf 1234567890 > input1.txt
@@ -35,7 +35,7 @@ mv input1.txt new_dir/input1.txt
 rm output.txt
 
 echo "=== Second run (restoring with remap) ==="
-setarch -R "$REPO/build/loader" dump.ckpt --native \
+setarch -R "$REPO/build/loader_pie" dump.ckpt --native \
     "$WORK/input1.txt=$WORK/new_dir/input1.txt" > run2.log 2> loader.log
 cat run2.log
 
